@@ -85,6 +85,7 @@ import math
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Iterable, Iterator
@@ -2112,15 +2113,37 @@ def get_slope_estimate(lat: float, lon: float, grid_spacing_m: float = 30.0) -> 
         (lat, lon + dlon), (lat, lon - dlon),
     ]
 
-    elevations = []
-    for plat, plon in sample_points:
+    # Fetch all 5 sample points IN PARALLEL, not one at a time, AND with
+    # a much shorter timeout than this file's usual REQUEST_TIMEOUT_S
+    # (30s). Fixed 2026-09-12: a real user hit a 110-second parcel-
+    # detail page load, traced to this function alone taking 54-ish
+    # seconds. Parallelizing the 5 requests helped some but NOT fully --
+    # live-measured, USGS's elevation service (EPQS) was itself just
+    # slow that day (each individual request taking ~30s), so firing 5
+    # requests at once doesn't help when the remote server is the
+    # bottleneck, not client-side sequential waiting. Slope is one
+    # nice-to-have section out of 10 in the full report (explicitly
+    # documented elsewhere as "a rough estimate, not survey-grade") --
+    # not worth holding up the whole page for. Give up fast and return
+    # {} (an honest, already-documented "no data" result) rather than
+    # let one slow government server block everything else.
+    _SLOPE_TIMEOUT_S = 8
+
+    def _fetch_one(point):
+        plat, plon = point
         params = {"x": plon, "y": plat, "units": "Meters", "wkid": 4326, "includeDate": "false"}
-        resp = requests.get(USGS_EPQS_URL, params=params, timeout=REQUEST_TIMEOUT_S)
+        resp = requests.get(USGS_EPQS_URL, params=params, timeout=_SLOPE_TIMEOUT_S)
         resp.raise_for_status()
-        try:
-            elevations.append(float(resp.json().get("value")))
-        except (TypeError, ValueError):
-            continue
+        return float(resp.json().get("value"))
+
+    elevations = []
+    with ThreadPoolExecutor(max_workers=len(sample_points)) as pool:
+        futures = [pool.submit(_fetch_one, p) for p in sample_points]
+        for future in futures:
+            try:
+                elevations.append(future.result(timeout=_SLOPE_TIMEOUT_S + 2))
+            except Exception:
+                continue
 
     if len(elevations) < 2:
         return {}
@@ -2320,6 +2343,21 @@ def get_comprehensive_buildability_report(polygon_coords: list[tuple[float, floa
     that section is set to None rather than crashing the whole report,
     so one bad connection doesn't lose everything else.
 
+    PERFORMANCE NOTE (fixed 2026-09-12): this runs all 10 checks below
+    IN PARALLEL (a thread pool), not one after another. A real user
+    reported this page taking 110 SECONDS to load -- confirmed live --
+    because the original version called 10 independent, unrelated
+    government/OSM services strictly in sequence, and a couple of them
+    (Overpass, the ESRI-backed checks) have their own multi-attempt
+    retry loops with real sleep delays built in for handling transient
+    server hiccups (see check_nearby_development and
+    _fetch_esri_intersecting_features) -- when several checks each hit
+    their retry ceiling, those delays stack up into minutes. None of
+    these 10 checks depend on each other's results, so there's no
+    reason to wait for one before starting the next. Running them
+    concurrently means total wait time is roughly the SLOWEST single
+    check, not the sum of all 10.
+
     Returns one dict with a section per check, plus a "concerns" list
     in plain English summarizing anything that stood out.
     """
@@ -2328,101 +2366,109 @@ def get_comprehensive_buildability_report(polygon_coords: list[tuple[float, floa
         parcel = parcel.buffer(0)
     lon0, lat0 = parcel.centroid.x, parcel.centroid.y
 
+    def _flood_and_wetland():
+        return calculate_buildability_score(polygon_coords)
+
+    def _road_access():
+        return check_road_access(polygon_coords)
+
+    def _environmental_designations():
+        return check_environmental_designations(polygon_coords)
+
+    checks = {
+        "flood_and_wetland": _flood_and_wetland,
+        "septic_suitability": lambda: get_septic_suitability(lat0, lon0),
+        "natural_hazard_risk": lambda: get_natural_hazard_risk(lat0, lon0),
+        "road_access": _road_access,
+        "environmental_designations": _environmental_designations,
+        "nearby_development": lambda: check_nearby_development(lat0, lon0),
+        "slope": lambda: get_slope_estimate(lat0, lon0),
+        "contamination": lambda: check_contamination_sites(lat0, lon0),
+        "wildfire_fine_grained": lambda: check_fine_grained_wildfire_risk(lat0, lon0),
+        "broadband": lambda: check_broadband_availability(lat0, lon0),
+    }
+
+    # PER-CHECK TIMEOUT, not just parallelism (fixed 2026-09-12, same
+    # day as the parallelization fix above): parallel requests still
+    # don't bound worst-case time if ANY one government/OSM service is
+    # having a slow day -- confirmed live, Overpass returned a 504 and
+    # its own retry-with-backoff logic alone added real seconds on top.
+    # Deliberately NOT using `with ThreadPoolExecutor(...) as pool:`
+    # here -- that form blocks on exit until every submitted task
+    # finishes, which would silently defeat a per-future timeout (a
+    # slow check would still hold up the whole function even after we
+    # stop waiting on it). Instead: submit everything, give each one a
+    # bounded wait, and shut down without waiting for stragglers --
+    # Python threads can't be force-killed, so an abandoned slow call
+    # just keeps running harmlessly in the background until it finishes
+    # on its own; it simply won't be part of THIS report.
+    _CHECK_TIMEOUT_S = 15
+
     report: dict = {}
+    pool = ThreadPoolExecutor(max_workers=len(checks))
+    try:
+        futures = {key: pool.submit(fn) for key, fn in checks.items()}
+        for key, future in futures.items():
+            try:
+                report[key] = future.result(timeout=_CHECK_TIMEOUT_S)
+            except Exception:
+                log.exception("%s check failed or timed out", key)
+                report[key] = None
+    finally:
+        pool.shutdown(wait=False)
+
     concerns: list[str] = []
 
-    try:
-        report["flood_and_wetland"] = calculate_buildability_score(polygon_coords)
+    if report["flood_and_wetland"] is not None:
         score = report["flood_and_wetland"]["buildability_score"]
         if score < 100:
             concerns.append(f"{100 - score:.1f}% of the lot is in a mapped flood zone or wetland.")
-    except Exception:
-        log.exception("Flood/wetland check failed")
-        report["flood_and_wetland"] = None
 
-    try:
-        report["septic_suitability"] = get_septic_suitability(lat0, lon0)
+    if report["septic_suitability"] is not None:
         rating = report["septic_suitability"].get("rating")
         if rating in ("Somewhat limited", "Very limited"):
             concerns.append(f"Soil septic suitability: {rating}.")
-    except Exception:
-        log.exception("Septic suitability check failed")
-        report["septic_suitability"] = None
 
-    try:
-        report["natural_hazard_risk"] = get_natural_hazard_risk(lat0, lon0)
+    if report["natural_hazard_risk"] is not None:
         for hazard, rating in report["natural_hazard_risk"].get("hazards", {}).items():
             if rating in ("Relatively High", "Very High"):
                 concerns.append(f"{hazard} risk rated '{rating}' for this area.")
-    except Exception:
-        log.exception("Natural hazard risk check failed")
-        report["natural_hazard_risk"] = None
 
-    try:
-        report["road_access"] = check_road_access(polygon_coords)
+    if report["road_access"] is not None:
         if not report["road_access"]["has_mapped_road_access"]:
             concerns.append("No mapped public road was found touching this parcel — may be landlocked.")
-    except Exception:
-        log.exception("Road access check failed")
-        report["road_access"] = None
 
-    try:
-        report["environmental_designations"] = check_environmental_designations(polygon_coords)
+    if report["environmental_designations"] is not None:
         env = report["environmental_designations"]
         if env["in_coastal_barrier_resources_system"]:
             concerns.append("Parcel is in a Coastal Barrier Resources System zone — no federal flood insurance/funding there.")
         if env["in_critical_habitat"]:
             concerns.append(f"Parcel overlaps critical habitat for: {', '.join(env['critical_habitat_species'])}.")
-    except Exception:
-        log.exception("Environmental designations check failed")
-        report["environmental_designations"] = None
 
-    try:
-        report["nearby_development"] = check_nearby_development(lat0, lon0)
+    if report["nearby_development"] is not None:
         if not report["nearby_development"]["likely_utilities_nearby"]:
             concerns.append(
                 "Very little development nearby — utilities may not be run to this area yet. "
                 "Confirm with the local utility company."
             )
-    except Exception:
-        log.exception("Nearby development check failed")
-        report["nearby_development"] = None
 
-    try:
-        report["slope"] = get_slope_estimate(lat0, lon0)
-        if report["slope"].get("steep"):
-            concerns.append(f"Steep terrain — approx {report['slope']['approx_slope_percent']}% slope.")
-    except Exception:
-        log.exception("Slope check failed")
-        report["slope"] = None
+    if report["slope"] is not None and report["slope"].get("steep"):
+        concerns.append(f"Steep terrain — approx {report['slope']['approx_slope_percent']}% slope.")
 
-    try:
-        report["contamination"] = check_contamination_sites(lat0, lon0)
+    if report["contamination"] is not None:
         if report["contamination"]["superfund_sites_nearby"]:
             concerns.append(f"Superfund site(s) nearby: {', '.join(report['contamination']['superfund_sites_nearby'])}.")
         if report["contamination"]["brownfield_sites_nearby"]:
             concerns.append(f"Brownfield site(s) nearby: {', '.join(report['contamination']['brownfield_sites_nearby'])}.")
-    except Exception:
-        log.exception("Contamination check failed")
-        report["contamination"] = None
 
-    try:
-        report["wildfire_fine_grained"] = check_fine_grained_wildfire_risk(lat0, lon0)
-        if "High" in (report["wildfire_fine_grained"].get("tier") or ""):
-            concerns.append("Fine-grained wildfire risk estimate: High.")
-    except Exception:
-        log.exception("Fine-grained wildfire check failed")
-        report["wildfire_fine_grained"] = None
+    if report["wildfire_fine_grained"] is not None and "High" in (report["wildfire_fine_grained"].get("tier") or ""):
+        concerns.append("Fine-grained wildfire risk estimate: High.")
 
-    try:
-        report["broadband"] = check_broadband_availability(lat0, lon0)
+    if report["broadband"] is not None:
         total = report["broadband"].get("total_locations")
         served = report["broadband"].get("served_locations")
         if total and served is not None and served == 0:
             concerns.append("No broadband service found in this area per FCC data.")
-    except Exception:
-        log.exception("Broadband check failed")
-        report["broadband"] = None
 
     report["concerns"] = concerns
     return report
