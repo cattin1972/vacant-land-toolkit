@@ -18,10 +18,21 @@ from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__)
 
-# In-memory cache of the last search's raw records, keyed by APN.
-# Fine for a single-user local prototype; a real multi-user deployment
-# would need a real session/database instead.
-_PARCEL_CACHE: dict[str, dict] = {}
+# NOTE: this app deliberately holds NO server-side, cross-request
+# parcel cache (fixed 2026-09-12 -- there used to be a shared
+# in-memory `_PARCEL_CACHE` dict here). That was a real correctness
+# risk for a real multi-subscriber product: one shared dict, keyed only
+# by APN, touched by every visitor's requests. APNs are only unique
+# WITHIN a county, not nationally, so two different customers searching
+# two different states could -- in principle -- collide on the same
+# key and serve each other stale or wrong data on a detail click. Even
+# short of an actual collision, a shared cache is simply the wrong
+# foundation for per-subscriber data. Every parcel's own raw data is
+# now sent to the browser at search time and handed back by the
+# browser itself on every follow-up request (report, skip trace) --
+# each visitor's browser is the only place their own search results
+# live, so there is no shared state between customers at all, by
+# construction, not by luck.
 
 # The 8 places with a real tax-delinquency check -- see
 # vacant_land_search.py for why only these 8 exist (no nationwide
@@ -123,7 +134,6 @@ def api_search():
 
     out = []
     for r in results:
-        _PARCEL_CACHE[r["apn"]] = r["raw"]
         tax_info = v.get_tax_assessment_info_realie(r["raw"])
         owner = v.get_current_owner_info(r["raw"].get("salesHistory") or [])
         mailing = v.get_owner_mailing_address(r["raw"])
@@ -157,15 +167,25 @@ def api_search():
             # rework once skip tracing lands.
             "owner_phone": None,
             "owner_email": None,
+            # The full raw Realie record -- the browser holds onto this
+            # and sends it back on every follow-up request (report,
+            # skip trace) instead of the server remembering it. See the
+            # module-level note above for why.
+            "raw": r["raw"],
         })
     return jsonify({"count": len(out), "results": out})
 
 
-@app.route("/api/parcel/<path:apn>/report")
+@app.route("/api/parcel/<path:apn>/report", methods=["POST"])
 def api_parcel_report(apn):
-    raw = _PARCEL_CACHE.get(apn)
-    if raw is None:
-        return jsonify({"error": "Parcel not found -- run a search first."}), 404
+    # The browser sends back the SAME raw record it already got from
+    # its own earlier /api/search call -- no server-side lookup at all,
+    # so there is nothing here that could ever be shared between two
+    # different visitors' sessions (see the module-level note above).
+    data = request.get_json(force=True) or {}
+    raw = data.get("raw")
+    if not raw:
+        return jsonify({"error": "Missing parcel data -- run a search first."}), 400
 
     lat, lon = raw.get("latitude"), raw.get("longitude")
     try:
@@ -215,18 +235,20 @@ def api_delinquency(place_key):
 @app.route("/api/skiptrace/<path:apn>", methods=["POST"])
 def api_skiptrace_one(apn):
     """
-    Skip traces the owner of ONE cached parcel. Takes the CALLER's own
-    Tracerfy API key in the request body -- never stored, never billed
-    to this site's own account (see the BYO-key section note in
-    vacant_land_search.py for why: both Tracerfy's and BatchData's own
-    Terms of Service prohibit a resale/markup model on one shared
-    account).
+    Skip traces the owner of ONE parcel. Takes the CALLER's own
+    Tracerfy API key AND the parcel's own raw data in the request body
+    -- no server-side lookup (see the module-level note above: no
+    shared state between visitors' sessions). Neither is ever stored;
+    the key is never billed to this site's own account (see the
+    BYO-key section note in vacant_land_search.py for why: both
+    Tracerfy's and BatchData's own Terms of Service prohibit a resale/
+    markup model on one shared account).
     """
-    raw = _PARCEL_CACHE.get(apn)
-    if raw is None:
-        return jsonify({"error": "Parcel not found -- run a search first."}), 404
-
     data = request.get_json(force=True) or {}
+    raw = data.get("raw")
+    if not raw:
+        return jsonify({"error": "Missing parcel data -- run a search first."}), 400
+
     api_key = (data.get("tracerfy_api_key") or "").strip()
     if not api_key:
         return jsonify({"error": "Tracerfy API key is required -- this is billed to YOUR OWN Tracerfy account."}), 400
@@ -248,27 +270,29 @@ def api_skiptrace_one(apn):
 @app.route("/api/skiptrace/bulk", methods=["POST"])
 def api_skiptrace_bulk():
     """
-    Skip traces MANY cached parcels at once (a "Skip Trace All Results"
+    Skip traces MANY parcels at once (a "Skip Trace All Results"
     button). Same BYO-key model as the single endpoint above -- every
-    lookup bills the caller's own Tracerfy account. `apns` in the
-    request body selects which cached parcels to trace; `max_lookups`
+    lookup bills the caller's own Tracerfy account. `parcels` in the
+    request body is a list of {"apn": ..., "raw": ...} -- the browser's
+    own copy of each parcel's data from its earlier /api/search call,
+    no server-side lookup (see the module-level note above). `max_lookups`
     (default 15, same default as skip_trace_owners_bulk) hard-caps real
     spend per click.
     """
     data = request.get_json(force=True) or {}
     api_key = (data.get("tracerfy_api_key") or "").strip()
-    apns = data.get("apns") or []
+    parcels = data.get("parcels") or []
     max_lookups = int(data.get("max_lookups") or 15)
 
     if not api_key:
         return jsonify({"error": "Tracerfy API key is required -- this is billed to YOUR OWN Tracerfy account."}), 400
-    if not apns:
+    if not parcels:
         return jsonify({"error": "No parcels selected."}), 400
 
     owners = []
-    for apn in apns:
-        raw = _PARCEL_CACHE.get(apn)
-        if raw is None:
+    for parcel in parcels:
+        apn, raw = parcel.get("apn"), parcel.get("raw")
+        if not raw:
             continue
         mailing = v.get_owner_mailing_address(raw)
         if not mailing.get("mail_street"):

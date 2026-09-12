@@ -158,10 +158,12 @@ function mergeSkipTraceResult(apn, trace) {
 async function skipTraceOne(apn) {
   const key = document.getElementById('tracerfy_key').value.trim();
   if (!key) { alert('Enter your Tracerfy API key first.'); return; }
+  const r = currentResults.find(x => x.apn === apn);
+  if (!r) { alert('Parcel not found in current results.'); return; }
   document.getElementById('skiptrace-status').textContent = `Skip tracing ${apn}...`;
   const resp = await fetch(`/api/skiptrace/${encodeURIComponent(apn)}`, {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({tracerfy_api_key: key}),
+    body: JSON.stringify({tracerfy_api_key: key, raw: r.raw}),
   });
   const data = await resp.json();
   if (data.error) { document.getElementById('skiptrace-status').textContent = 'Error: ' + data.error; return; }
@@ -196,7 +198,11 @@ async function skipTraceAll() {
   document.getElementById('skiptrace-status').textContent = `Skip tracing ${toTrace.length} owners...`;
   const resp = await fetch('/api/skiptrace/bulk', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({tracerfy_api_key: key, apns: toTrace.map(r => r.apn), max_lookups: maxLookups}),
+    body: JSON.stringify({
+      tracerfy_api_key: key,
+      parcels: toTrace.map(r => ({apn: r.apn, raw: r.raw})),
+      max_lookups: maxLookups,
+    }),
   });
   const data = await resp.json();
   if (data.error) { document.getElementById('skiptrace-status').textContent = 'Error: ' + data.error; return; }
@@ -307,8 +313,13 @@ function renderHeat() {
 }
 
 async function loadParcelDetail(apn) {
+  const r = currentResults.find(x => x.apn === apn);
+  if (!r) { document.getElementById('detail').textContent = 'Parcel not found in current results.'; return; }
   document.getElementById('detail').textContent = 'Loading...';
-  const resp = await fetch(`/api/parcel/${encodeURIComponent(apn)}/report`);
+  const resp = await fetch(`/api/parcel/${encodeURIComponent(apn)}/report`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({raw: r.raw}),
+  });
   const data = await resp.json();
   if (data.error) { document.getElementById('detail').textContent = 'Error: ' + data.error; return; }
 
