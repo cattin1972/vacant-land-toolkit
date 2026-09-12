@@ -1141,6 +1141,9 @@ MIAMI_DADE_ZONING_URL = "https://gisweb.miamidade.gov/arcgis/rest/services/LandM
 KING_COUNTY_ZONING_URL = "https://gismaps.kingcounty.gov/arcgis/rest/services/Planning/KingCo_Zoning/MapServer/1/query"
 
 
+_ZONING_TIMEOUT_S = 8
+
+
 def _query_zoning_point(url: str, lat: float, lon: float) -> dict | None:
     params = {
         "geometry": json.dumps({"x": lon, "y": lat, "spatialReference": {"wkid": 4326}}),
@@ -1151,7 +1154,16 @@ def _query_zoning_point(url: str, lat: float, lon: float) -> dict | None:
         "returnGeometry": "false",
         "f": "json",
     }
-    resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT_S)
+    # Short timeout, not this file's usual REQUEST_TIMEOUT_S (30s) --
+    # fixed 2026-09-12: this used to be called twice IN SEQUENCE with
+    # no timeout override at all, so if both government zoning servers
+    # were slow, a parcel-detail page could wait up to 60 seconds on
+    # this alone (confirmed live: a real request failed at ~61s, right
+    # after the buildability report itself had already been fixed and
+    # bounded to ~18s -- this separate zoning call was the actual
+    # remaining cause). Zoning coverage here is already a narrow bonus
+    # (only 2 counties), not worth blocking the page over.
+    resp = requests.get(url, params=params, timeout=_ZONING_TIMEOUT_S)
     resp.raise_for_status()
     features = resp.json().get("features", [])
     return features[0]["attributes"] if features else None
@@ -1182,24 +1194,41 @@ def check_zoning_district(lat: float, lon: float) -> dict:
          "zoning_code": ..., "zoning_description": ..., "municipality": ..., "overlay": ...}
     or {} if this point isn't covered by either known layer.
     """
-    attrs = _query_zoning_point(MIAMI_DADE_ZONING_URL, lat, lon)
-    if attrs:
-        return {
-            "source": "Miami-Dade County, FL (unincorporated areas only)",
-            "zoning_code": attrs.get("ZONE"),
-            "zoning_description": attrs.get("ZONE_DESC") or attrs.get("SHORT_DESC"),
-            "municipality": attrs.get("MUNC"),
-            "overlay": attrs.get("OVLY"),
-        }
+    # Run both known layers IN PARALLEL rather than one after another --
+    # they're independent (a point can only ever be covered by one of
+    # them), and this also means a slow/failed Miami-Dade lookup no
+    # longer prevents King County from being tried, which the old
+    # sequential try/fall-through structure would have done.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        miami_future = pool.submit(_query_zoning_point, MIAMI_DADE_ZONING_URL, lat, lon)
+        king_future = pool.submit(_query_zoning_point, KING_COUNTY_ZONING_URL, lat, lon)
 
-    attrs = _query_zoning_point(KING_COUNTY_ZONING_URL, lat, lon)
-    if attrs:
-        return {
-            "source": "King County, WA (unincorporated areas only)",
-            "zoning_code": attrs.get("CURRZONE"),
-            "potential_rezone": attrs.get("POTENTIAL"),
-            "current_temporary_zone": attrs.get("CURRTEMP"),
-        }
+        try:
+            attrs = miami_future.result()
+        except Exception:
+            log.warning("Miami-Dade zoning lookup failed or timed out")
+            attrs = None
+        if attrs:
+            return {
+                "source": "Miami-Dade County, FL (unincorporated areas only)",
+                "zoning_code": attrs.get("ZONE"),
+                "zoning_description": attrs.get("ZONE_DESC") or attrs.get("SHORT_DESC"),
+                "municipality": attrs.get("MUNC"),
+                "overlay": attrs.get("OVLY"),
+            }
+
+        try:
+            attrs = king_future.result()
+        except Exception:
+            log.warning("King County zoning lookup failed or timed out")
+            attrs = None
+        if attrs:
+            return {
+                "source": "King County, WA (unincorporated areas only)",
+                "zoning_code": attrs.get("CURRZONE"),
+                "potential_rezone": attrs.get("POTENTIAL"),
+                "current_temporary_zone": attrs.get("CURRTEMP"),
+            }
 
     return {}
 
