@@ -101,6 +101,42 @@ let currentResults = [];
 let heatLayer = null;
 let heatMode = 'none';
 
+// Persist search results in the browser itself (fixed 2026-09-12: a
+// user correctly pointed out that losing results from a simple page
+// refresh -- or the tab closing and reopening -- is unacceptable; only
+// the user's OWN action (a new search) should ever clear them). This
+// is per-browser, not per-account -- there's no login system yet, so
+// results won't follow a subscriber to a different device/browser,
+// and clearing browser data would still clear this. That's an honest
+// limit of doing this before real accounts exist, not a promise this
+// is permanent, unbreakable storage.
+const RESULTS_STORAGE_KEY = 'vacant_land_current_results';
+
+function saveResultsToStorage() {
+  try {
+    localStorage.setItem(RESULTS_STORAGE_KEY, JSON.stringify(currentResults));
+  } catch (e) {
+    console.warn('Could not save results to local storage:', e);
+  }
+}
+
+function restoreResultsFromStorage() {
+  try {
+    const saved = localStorage.getItem(RESULTS_STORAGE_KEY);
+    if (!saved) return;
+    currentResults = JSON.parse(saved);
+    if (currentResults.length) {
+      document.getElementById('result-count').textContent = currentResults.length;
+      setStatus(`Restored ${currentResults.length} results from your last search.`);
+      renderResults();
+      renderMarkers();
+      renderHeat();
+    }
+  } catch (e) {
+    console.warn('Could not restore results from local storage:', e);
+  }
+}
+
 function setStatus(msg) { document.getElementById('status').textContent = msg; }
 
 async function runSearch() {
@@ -120,6 +156,7 @@ async function runSearch() {
   if (data.error) { setStatus('Error: ' + data.error); return; }
 
   currentResults = data.results;
+  saveResultsToStorage();
   setStatus(`Found ${data.count} genuinely vacant parcels.`);
   document.getElementById('result-count').textContent = data.count;
   renderResults();
@@ -153,6 +190,7 @@ function mergeSkipTraceResult(apn, trace) {
   if (!r) return;
   if (trace.phones && trace.phones.length) r.owner_phone = trace.phones.map(p => p.number).join('; ');
   if (trace.emails && trace.emails.length) r.owner_email = trace.emails.join('; ');
+  saveResultsToStorage();
 }
 
 async function skipTraceOne(apn) {
@@ -354,6 +392,8 @@ async function checkDelinquency() {
   const data = await resp.json();
   el.textContent = JSON.stringify(data, null, 2);
 }
+
+restoreResultsFromStorage();
 </script>
 </body>
 </html>
