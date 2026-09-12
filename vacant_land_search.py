@@ -85,7 +85,7 @@ import math
 import os
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Iterable, Iterator
@@ -2388,31 +2388,45 @@ def get_comprehensive_buildability_report(polygon_coords: list[tuple[float, floa
         "broadband": lambda: check_broadband_availability(lat0, lon0),
     }
 
-    # PER-CHECK TIMEOUT, not just parallelism (fixed 2026-09-12, same
-    # day as the parallelization fix above): parallel requests still
-    # don't bound worst-case time if ANY one government/OSM service is
-    # having a slow day -- confirmed live, Overpass returned a 504 and
-    # its own retry-with-backoff logic alone added real seconds on top.
-    # Deliberately NOT using `with ThreadPoolExecutor(...) as pool:`
-    # here -- that form blocks on exit until every submitted task
-    # finishes, which would silently defeat a per-future timeout (a
-    # slow check would still hold up the whole function even after we
-    # stop waiting on it). Instead: submit everything, give each one a
-    # bounded wait, and shut down without waiting for stragglers --
-    # Python threads can't be force-killed, so an abandoned slow call
-    # just keeps running harmlessly in the background until it finishes
-    # on its own; it simply won't be part of THIS report.
-    _CHECK_TIMEOUT_S = 15
+    # ONE OVERALL DEADLINE for the whole batch, not a per-check timeout
+    # (fixed AGAIN 2026-09-12, same day -- the first version of this
+    # fix had a real bug: calling future.result(timeout=15) inside a
+    # for-loop, once per check, does NOT bound the total wait to 15s --
+    # each iteration gets its OWN fresh 15s allowance regardless of how
+    # long earlier iterations in the loop already took. Confirmed live:
+    # a real request took 30.96s and got a 500 -- two checks each
+    # genuinely taking ~15s in turn added up past gunicorn's default
+    # 30-second worker timeout, which KILLED THE WORKER MID-REQUEST,
+    # instantly wiping every visitor's cached search results with zero
+    # idle time needed -- this is what was actually causing the
+    # "Parcel not found" errors, not the free-tier idle spin-down.
+    # concurrent.futures.wait(..., timeout=X) below waits for ALL
+    # futures against ONE shared deadline, so total time is properly
+    # capped at _TOTAL_DEADLINE_S regardless of how many checks there
+    # are or how they're distributed. Deliberately NOT using
+    # `with ThreadPoolExecutor(...) as pool:` -- that form blocks on
+    # exit until every submitted task finishes, which would silently
+    # defeat this deadline (a slow check would still hold up the whole
+    # function even after we stop waiting on it). Python threads can't
+    # be force-killed, so an abandoned slow call just keeps running
+    # harmlessly in the background until it finishes on its own; it
+    # simply won't be part of THIS report.
+    _TOTAL_DEADLINE_S = 18
 
     report: dict = {}
     pool = ThreadPoolExecutor(max_workers=len(checks))
     try:
         futures = {key: pool.submit(fn) for key, fn in checks.items()}
+        done, not_done = wait(futures.values(), timeout=_TOTAL_DEADLINE_S)
         for key, future in futures.items():
+            if future in not_done:
+                log.warning("%s check did not finish within %ss", key, _TOTAL_DEADLINE_S)
+                report[key] = None
+                continue
             try:
-                report[key] = future.result(timeout=_CHECK_TIMEOUT_S)
+                report[key] = future.result()
             except Exception:
-                log.exception("%s check failed or timed out", key)
+                log.exception("%s check failed", key)
                 report[key] = None
     finally:
         pool.shutdown(wait=False)
