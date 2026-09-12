@@ -1,0 +1,6 @@
+flask
+requests
+shapely
+pyproj
+psycopg2-binary
+gunicorn

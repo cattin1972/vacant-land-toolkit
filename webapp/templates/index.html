@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Vacant Land Toolkit -- Prototype</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, sans-serif; display: flex; height: 100vh; }
+  #sidebar { width: 380px; padding: 16px; overflow-y: auto; border-right: 1px solid #ccc; }
+  #map { flex: 1; }
+  h1 { font-size: 18px; margin: 0 0 12px; }
+  h2 { font-size: 14px; margin: 16px 0 8px; border-top: 1px solid #ddd; padding-top: 12px; }
+  label { display: block; font-size: 12px; margin-top: 8px; color: #444; }
+  input, select { width: 100%; padding: 5px; margin-top: 2px; font-size: 13px; }
+  button { margin-top: 10px; width: 100%; padding: 8px; cursor: pointer; }
+  .result-item { padding: 6px; border-bottom: 1px solid #eee; cursor: pointer; font-size: 12px; }
+  .result-item:hover { background: #f5f5f5; }
+  .flagged { color: #b00; font-weight: bold; }
+  #detail { font-size: 12px; white-space: pre-wrap; }
+  .concern { color: #b00; margin: 2px 0; }
+  #status { font-size: 12px; color: #666; min-height: 16px; }
+  .heat-toggle { display: flex; gap: 6px; margin-top: 6px; }
+  .heat-toggle button { flex: 1; font-size: 11px; padding: 5px; }
+  .heat-toggle button.active { background: #333; color: #fff; }
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+  <h1>Vacant Land Toolkit</h1>
+
+  <h2>Search</h2>
+  <label>State</label>
+  <input id="state" value="FL" maxlength="2">
+  <label>County (optional)</label>
+  <input id="county" value="Lee">
+  <label>City (optional)</label>
+  <input id="city" value="Cape Coral">
+  <label>Min acres</label>
+  <input id="min_acres" type="number" step="0.1">
+  <label>Max acres</label>
+  <input id="max_acres" type="number" step="0.1">
+  <label>Realie API key (only needed if REALIE_API_KEY isn't set on the server)</label>
+  <input id="api_key" type="password" placeholder="leave blank to use server env var">
+  <button onclick="runSearch()">Search vacant land (1 Realie token)</button>
+  <div id="status"></div>
+
+  <h2>Map overlay</h2>
+  <div class="heat-toggle">
+    <button id="heat-none" class="active" onclick="setHeat('none')">Off</button>
+    <button id="heat-value" onclick="setHeat('value')">Land value</button>
+    <button id="heat-distressed" onclick="setHeat('distressed')">Distressed concentration</button>
+  </div>
+
+  <h2>Skip Tracing (your own Tracerfy account)</h2>
+  <p style="font-size:11px; color:#666; margin:2px 0 6px;">
+    Every lookup bills YOUR OWN Tracerfy account directly -- this site never
+    sees or pays for it. No account? <a href="https://www.tracerfy.com/" target="_blank">Sign up at tracerfy.com</a>.
+  </p>
+  <label>Tracerfy API key</label>
+  <input id="tracerfy_key" type="password" placeholder="paste your Tracerfy key">
+  <button onclick="skipTraceAll()">Skip Trace All Results</button>
+  <div id="skiptrace-status" style="font-size:12px; color:#666; margin-top:4px;"></div>
+
+  <h2>Results (<span id="result-count">0</span>)</h2>
+  <div class="heat-toggle">
+    <button onclick="downloadCsv()">Download CSV</button>
+    <button onclick="openPrintView()">Print list</button>
+  </div>
+  <div id="results"></div>
+
+  <h2>Parcel detail</h2>
+  <div id="detail">Click a result or map marker to see the full report.</div>
+
+  <h2>Tax delinquency lookup (8 places only)</h2>
+  <label>Place</label>
+  <select id="delinquency-place">
+    {% for key, place in delinquency_checks.items() %}
+    <option value="{{ key }}" data-example="{{ place.example }}" data-label="{{ place.id_label }}">{{ place.label }}</option>
+    {% endfor %}
+  </select>
+  <label id="delinquency-id-label">Account number</label>
+  <input id="delinquency-id" placeholder="000080001506">
+  <button onclick="checkDelinquency()">Check</button>
+  <div id="delinquency-result" style="font-size:12px; white-space:pre-wrap; margin-top:8px;"></div>
+</div>
+
+<div id="map"></div>
+
+<script>
+const map = L.map('map').setView([27.6648, -81.5158], 7); // Florida-ish default
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; OpenStreetMap contributors'
+}).addTo(map);
+
+let markers = [];
+let currentResults = [];
+let heatLayer = null;
+let heatMode = 'none';
+
+function setStatus(msg) { document.getElementById('status').textContent = msg; }
+
+async function runSearch() {
+  const body = {
+    state: document.getElementById('state').value,
+    county: document.getElementById('county').value,
+    city: document.getElementById('city').value,
+    min_acres: document.getElementById('min_acres').value,
+    max_acres: document.getElementById('max_acres').value,
+    api_key: document.getElementById('api_key').value,
+  };
+  setStatus('Searching...');
+  const resp = await fetch('/api/search', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+  });
+  const data = await resp.json();
+  if (data.error) { setStatus('Error: ' + data.error); return; }
+
+  currentResults = data.results;
+  setStatus(`Found ${data.count} genuinely vacant parcels.`);
+  document.getElementById('result-count').textContent = data.count;
+  renderResults();
+  renderMarkers();
+  renderHeat();
+}
+
+function renderResults() {
+  const el = document.getElementById('results');
+  el.innerHTML = '';
+  currentResults.forEach(r => {
+    const div = document.createElement('div');
+    div.className = 'result-item';
+    const flag = r.tax_flags && r.tax_flags.flagged ? ' <span class="flagged">[FLAG]</span>' : '';
+    const phone = r.owner_phone ? ` — ${r.owner_phone}` : '';
+    div.innerHTML = `<span style="cursor:pointer">${r.apn} -- ${r.acres ? r.acres.toFixed(2) : '?'} ac${flag}${phone}</span> `;
+    div.querySelector('span').onclick = () => loadParcelDetail(r.apn);
+    if (!r.owner_phone) {
+      const btn = document.createElement('button');
+      btn.textContent = 'Skip Trace';
+      btn.style.cssText = 'font-size:10px; padding:1px 4px; margin-left:4px;';
+      btn.onclick = (e) => { e.stopPropagation(); skipTraceOne(r.apn); };
+      div.appendChild(btn);
+    }
+    el.appendChild(div);
+  });
+}
+
+function mergeSkipTraceResult(apn, trace) {
+  const r = currentResults.find(x => x.apn === apn);
+  if (!r) return;
+  if (trace.phones && trace.phones.length) r.owner_phone = trace.phones.map(p => p.number).join('; ');
+  if (trace.emails && trace.emails.length) r.owner_email = trace.emails.join('; ');
+}
+
+async function skipTraceOne(apn) {
+  const key = document.getElementById('tracerfy_key').value.trim();
+  if (!key) { alert('Enter your Tracerfy API key first.'); return; }
+  document.getElementById('skiptrace-status').textContent = `Skip tracing ${apn}...`;
+  const resp = await fetch(`/api/skiptrace/${encodeURIComponent(apn)}`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({tracerfy_api_key: key}),
+  });
+  const data = await resp.json();
+  if (data.error) { document.getElementById('skiptrace-status').textContent = 'Error: ' + data.error; return; }
+  mergeSkipTraceResult(apn, data);
+  renderResults();
+  document.getElementById('skiptrace-status').textContent = data.hit ? `Found a match for ${apn}.` : `No match found for ${apn}.`;
+}
+
+async function skipTraceAll() {
+  const key = document.getElementById('tracerfy_key').value.trim();
+  if (!key) { alert('Enter your Tracerfy API key first.'); return; }
+  const untraced = currentResults.filter(r => !r.owner_phone && !r.owner_email);
+  if (!untraced.length) { alert('Nothing left to skip trace in this result set.'); return; }
+
+  const maxLookups = 15;
+  const toTrace = untraced.slice(0, maxLookups);
+  // $0.10/lookup is the REAL cost observed in a live test (5 credits),
+  // not Tracerfy's cheapest documented 1-credit/$0.02 tier -- that
+  // tier turned out not to be the typical case. Range still $0.02-$0.30
+  // depending on which trace tier a given lookup actually needs.
+  const estCost = (toTrace.length * 0.10).toFixed(2);
+  const skippedNote = untraced.length > maxLookups
+    ? `\n\n(Only the first ${maxLookups} of ${untraced.length} untraced results will run per click -- run again for the rest.)`
+    : '';
+  const confirmed = confirm(
+    `This will skip trace ${toTrace.length} owner(s), billed to YOUR Tracerfy account.\n` +
+    `Estimated cost: ~$${estCost} (typically ~$0.10/lookup; can range $0.02-$0.30 depending on trace difficulty).${skippedNote}\n\n` +
+    `Continue?`
+  );
+  if (!confirmed) return;
+
+  document.getElementById('skiptrace-status').textContent = `Skip tracing ${toTrace.length} owners...`;
+  const resp = await fetch('/api/skiptrace/bulk', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({tracerfy_api_key: key, apns: toTrace.map(r => r.apn), max_lookups: maxLookups}),
+  });
+  const data = await resp.json();
+  if (data.error) { document.getElementById('skiptrace-status').textContent = 'Error: ' + data.error; return; }
+
+  let hits = 0;
+  data.results.forEach(r => { mergeSkipTraceResult(r.apn, r); if (r.hit) hits++; });
+  renderResults();
+  document.getElementById('skiptrace-status').textContent = `Done -- ${hits} of ${data.count} found a match.`;
+}
+
+// Column order/labels chosen to match the standard mail-merge format
+// used by direct-mail providers' own bulk-upload tools (PostGrid,
+// Click2Mail, Yellow Letter HQ, etc.) -- this file should be uploadable
+// as-is to any of them. Mailing address columns come first and use the
+// OWNER's mailing address (get_owner_mailing_address), NOT the vacant
+// property's own site address -- a vacant lot is often not a
+// deliverable mailing address at all. The property's address is kept
+// further down, clearly labeled as reference-only.
+const CSV_COLUMNS = [
+  ['owner_name', 'Recipient Name'],
+  ['mail_street', 'Mailing Address'],
+  ['mail_city', 'Mailing City'],
+  ['mail_state', 'Mailing State'],
+  ['mail_zip', 'Mailing Zip'],
+  ['owner_type', 'Owner Type'],
+  ['owner_phone', 'Phone'],
+  ['owner_email', 'Email'],
+  ['apn', 'APN'],
+  ['address', 'Property Address (reference only -- do not mail here)'],
+  ['city', 'Property City'], ['state', 'Property State'], ['zip_code', 'Property Zip'],
+  ['acres', 'Acres'], ['land_value', 'Land Value'], ['tax_flag', 'Tax Flag'],
+];
+
+function csvEscape(value) {
+  const s = value === null || value === undefined ? '' : String(value);
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+function downloadCsv() {
+  if (!currentResults.length) { alert('Run a search first.'); return; }
+  const header = CSV_COLUMNS.map(([, label]) => csvEscape(label)).join(',');
+  const rows = currentResults.map(r =>
+    CSV_COLUMNS.map(([key]) => {
+      if (key === 'tax_flag') return csvEscape(r.tax_flags && r.tax_flags.flagged ? 'YES' : '');
+      let v = r[key];
+      if (key === 'owner_phone' || key === 'owner_email') v = v || '(not skip-traced)';
+      return csvEscape(v);
+    }).join(',')
+  );
+  const csv = [header, ...rows].join('\r\n');
+  const blob = new Blob([csv], {type: 'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `vacant_land_leads_${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function openPrintView() {
+  if (!currentResults.length) { alert('Run a search first.'); return; }
+  localStorage.setItem('vacant_land_export_data', JSON.stringify(currentResults));
+  window.open('/print', '_blank');
+}
+
+function renderMarkers() {
+  markers.forEach(m => map.removeLayer(m));
+  markers = [];
+  if (!currentResults.length) return;
+  const bounds = [];
+  currentResults.forEach(r => {
+    const color = r.tax_flags && r.tax_flags.flagged ? 'red' : 'green';
+    const marker = L.circleMarker([r.lat, r.lon], {radius: 6, color: color, fillOpacity: 0.7}).addTo(map);
+    marker.bindTooltip(`${r.apn}<br>${r.acres ? r.acres.toFixed(2) : '?'} ac`);
+    marker.on('click', () => loadParcelDetail(r.apn));
+    markers.push(marker);
+    bounds.push([r.lat, r.lon]);
+  });
+  map.fitBounds(bounds, {maxZoom: 15});
+}
+
+function setHeat(mode) {
+  heatMode = mode;
+  document.querySelectorAll('.heat-toggle button').forEach(b => b.classList.remove('active'));
+  document.getElementById('heat-' + mode).classList.add('active');
+  renderHeat();
+}
+
+function renderHeat() {
+  if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; }
+  if (heatMode === 'none' || !currentResults.length) return;
+
+  let points;
+  if (heatMode === 'value') {
+    const values = currentResults.map(r => r.land_value || 0).filter(v => v > 0);
+    const maxVal = Math.max(...values, 1);
+    points = currentResults
+      .filter(r => r.land_value)
+      .map(r => [r.lat, r.lon, Math.min(r.land_value / maxVal, 1)]);
+  } else if (heatMode === 'distressed') {
+    points = currentResults.map(r => [r.lat, r.lon, (r.tax_flags && r.tax_flags.flagged) ? 1.0 : 0.15]);
+  }
+  if (points && points.length) {
+    heatLayer = L.heatLayer(points, {radius: 35, blur: 25, maxZoom: 17}).addTo(map);
+  }
+}
+
+async function loadParcelDetail(apn) {
+  document.getElementById('detail').textContent = 'Loading...';
+  const resp = await fetch(`/api/parcel/${encodeURIComponent(apn)}/report`);
+  const data = await resp.json();
+  if (data.error) { document.getElementById('detail').textContent = 'Error: ' + data.error; return; }
+
+  let out = `APN: ${data.apn}\n\n`;
+  out += `--- OWNER ---\n${JSON.stringify(data.current_owner, null, 2)}\n\n`;
+  out += `--- TAX ASSESSMENT ---\n${JSON.stringify(data.tax_assessment, null, 2)}\n\n`;
+  out += `--- TAX FLAGS ---\n${JSON.stringify(data.tax_flags, null, 2)}\n\n`;
+  out += `--- ZONING (only covers unincorporated Miami-Dade FL & King County WA) ---\n`;
+  out += (data.zoning && Object.keys(data.zoning).length) ? JSON.stringify(data.zoning, null, 2) : 'Not covered for this location.';
+  out += `\n\n`;
+  out += `--- BUILDABILITY CONCERNS ---\n`;
+  const concerns = (data.buildability && data.buildability.concerns) || [];
+  out += concerns.length ? concerns.map(c => '- ' + c).join('\n') : 'None flagged.';
+  out += `\n\n--- FULL BUILDABILITY REPORT ---\n${JSON.stringify(data.buildability, null, 2)}\n\n`;
+  out += `--- LISTING LINKS ---\n${JSON.stringify(data.listing_links, null, 2)}`;
+  document.getElementById('detail').textContent = out;
+}
+
+document.getElementById('delinquency-place').addEventListener('change', function() {
+  const opt = this.selectedOptions[0];
+  document.getElementById('delinquency-id-label').textContent = opt.dataset.label;
+  document.getElementById('delinquency-id').placeholder = opt.dataset.example;
+});
+
+async function checkDelinquency() {
+  const place = document.getElementById('delinquency-place').value;
+  const id = document.getElementById('delinquency-id').value.trim();
+  const el = document.getElementById('delinquency-result');
+  if (!id) { el.textContent = 'Enter an ID first.'; return; }
+  el.textContent = 'Checking...';
+  const resp = await fetch(`/api/delinquency/${place}?id=${encodeURIComponent(id)}`);
+  const data = await resp.json();
+  el.textContent = JSON.stringify(data, null, 2);
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Lead List -- Print</title>
+<style>
+  body { font-family: system-ui, sans-serif; padding: 20px; }
+  h1 { font-size: 18px; margin-bottom: 4px; }
+  .meta { font-size: 12px; color: #555; margin-bottom: 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  th, td { border: 1px solid #999; padding: 4px 6px; text-align: left; }
+  th { background: #eee; }
+  .flagged { color: #b00; font-weight: bold; }
+  @media print {
+    button { display: none; }
+  }
+</style>
+</head>
+<body>
+<button onclick="window.print()">Print / Save as PDF</button>
+<h1>Vacant Land Lead List</h1>
+<div class="meta" id="meta"></div>
+<p style="font-size:11px; color:#666;">Mailing Address columns are the OWNER's mailing address, not the vacant lot's own site address (a vacant lot is often not a deliverable mailing address at all).</p>
+<table>
+  <thead>
+    <tr>
+      <th>Recipient Name</th><th>Mailing Address</th><th>Mailing City</th><th>Mailing State</th><th>Mailing Zip</th>
+      <th>Owner Type</th><th>Phone</th><th>Email</th>
+      <th>APN</th><th>Property Address (ref. only)</th><th>Acres</th><th>Land Value</th><th>Tax Flag</th>
+    </tr>
+  </thead>
+  <tbody id="rows"></tbody>
+</table>
+
+<script>
+const data = JSON.parse(localStorage.getItem('vacant_land_export_data') || '[]');
+document.getElementById('meta').textContent = `${data.length} parcels -- generated ${new Date().toLocaleString()}`;
+const tbody = document.getElementById('rows');
+data.forEach(r => {
+  const tr = document.createElement('tr');
+  const flagged = r.tax_flags && r.tax_flags.flagged;
+  tr.innerHTML = `
+    <td>${r.owner_name || ''}</td>
+    <td>${r.mail_street || ''}</td>
+    <td>${r.mail_city || ''}</td>
+    <td>${r.mail_state || ''}</td>
+    <td>${r.mail_zip || ''}</td>
+    <td>${r.owner_type || ''}</td>
+    <td>${r.owner_phone || '(not skip-traced)'}</td>
+    <td>${r.owner_email || '(not skip-traced)'}</td>
+    <td>${r.apn || ''}</td>
+    <td>${r.address || ''}</td>
+    <td>${r.acres != null ? r.acres.toFixed(2) : ''}</td>
+    <td>${r.land_value != null ? '$' + r.land_value.toLocaleString() : ''}</td>
+    <td class="${flagged ? 'flagged' : ''}">${flagged ? 'YES' : ''}</td>
+  `;
+  tbody.appendChild(tr);
+});
+</script>
+</body>
+</html>
