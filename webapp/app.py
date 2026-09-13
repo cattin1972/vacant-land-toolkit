@@ -212,6 +212,7 @@ def api_parcel_report(apn):
     raw = data.get("raw")
     if not raw:
         return jsonify({"error": "Missing parcel data -- run a search first."}), 400
+    acres = data.get("acres")
 
     lat, lon = raw.get("latitude"), raw.get("longitude")
     try:
@@ -234,6 +235,7 @@ def api_parcel_report(apn):
 
     tax_flags = v.get_tax_flags(raw)
     owner_mailing = v.get_owner_mailing_address(raw)
+    current_owner = v.get_current_owner_info(raw.get("salesHistory") or [])
 
     # The trust/evidence report is the PRIMARY thing the UI now renders --
     # see the framework's own module-level docstring in vacant_land_search.py
@@ -264,13 +266,39 @@ def api_parcel_report(apn):
     except Exception as e:
         decision = {"error": str(e)}
 
+    # CONTACT OWNER / OFFER-NEGOTIATE layer -- pure synthesis of everything
+    # above, zero new network calls. See both functions' own docstrings
+    # for why neither one suggests an offer price or gives contract advice.
+    property_city = loc.get("city")
+    property_state = loc.get("state")
+    priority = v.build_instant_priority(tax_flags, current_owner, owner_mailing, property_city, property_state)
+    try:
+        buyer_fit = v.build_buyer_fit_tags(
+            float(acres) if acres is not None else None,
+            buildability if "error" not in buildability else {},
+            evidence if "error" not in evidence else {},
+        )
+    except Exception as e:
+        buyer_fit = [{"tag": "Buyer-fit unavailable", "reason": str(e)}]
+    try:
+        outreach_brief = v.build_owner_outreach_brief(
+            current_owner, owner_mailing, tax_flags, priority, decision,
+            evidence if "error" not in evidence else {},
+            float(acres) if acres is not None else None,
+            property_city, property_state,
+        )
+    except Exception as e:
+        outreach_brief = {"error": str(e)}
+
     return jsonify({
         "apn": apn,
         "decision": decision,
+        "buyer_fit": buyer_fit,
+        "outreach_brief": outreach_brief,
         "evidence": evidence,
         "buildability": buildability,
         "tax_assessment": v.get_tax_assessment_info_realie(raw),
-        "current_owner": v.get_current_owner_info(raw.get("salesHistory") or []),
+        "current_owner": current_owner,
         "tax_flags": tax_flags,
         "listing_links": listing_links,
         "zoning": zoning,

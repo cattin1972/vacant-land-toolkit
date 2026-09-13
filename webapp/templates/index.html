@@ -117,13 +117,32 @@
   .pick-reason { font-size: 10.5px; color: #2e7d32; margin-top: 2px; line-height: 1.35; }
   .pick-reason.negative { color: #a52a1f; }
   .pick-reason.note { color: #9c6f00; font-style: italic; }
+
+  /* Workflow-stage organization + wholesaler tools */
+  .stage-label { display: inline-block; font-size: 9.5px; font-weight: bold; letter-spacing: 0.03em; color: #145a99; background: #e8f1fb; border-radius: 3px; padding: 1px 6px; margin-bottom: 3px; }
+  .disclaimer-banner { font-size: 10.5px; color: #5a4300; background: #fff8e1; border: 1px solid #d4a017; border-radius: 4px; padding: 6px 8px; margin: 6px 0; line-height: 1.4; }
+  .buyer-fit-row { display: flex; flex-wrap: wrap; gap: 5px; margin: 6px 0; }
+  .buyer-fit-tag { font-size: 10.5px; background: #eef4ff; border: 1px solid #b9d0f0; color: #1a4a8a; border-radius: 10px; padding: 2px 8px; cursor: default; }
+  .outreach-box { border: 1px solid #ddd; border-radius: 4px; padding: 8px 10px; margin: 8px 0; background: #fafafa; }
+  .outreach-box h4 { margin: 0 0 4px; font-size: 12px; }
+  .outreach-list { margin: 2px 0 6px; padding-left: 16px; font-size: 11.5px; line-height: 1.5; }
+  .checklist-item { display: flex; align-items: flex-start; gap: 6px; font-size: 11.5px; margin: 3px 0; line-height: 1.4; }
+  .checklist-item input { width: auto; margin: 2px 0 0; }
+  .comps-links { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+  .comps-links a { font-size: 11px; color: #145a99; }
+  .copy-btn { width: auto; font-size: 10.5px; padding: 3px 8px; margin: 4px 0 0; }
 </style>
 </head>
 <body>
 
 <div id="sidebar">
   <h1>Vacant Land Toolkit</h1>
+  <div class="disclaimer-banner">
+    Screening &amp; research aid for wholesalers -- not a substitute for title, survey, county,
+    engineering, environmental, septic, or zoning verification by a licensed professional.
+  </div>
 
+  <span class="stage-label">1. DISCOVER</span>
   <h2>Search</h2>
   <label>State</label>
   <input id="state" value="FL" maxlength="2">
@@ -140,27 +159,11 @@
   <button onclick="runSearch()">Search vacant land (1 Realie token)</button>
   <div id="status"></div>
 
-  <h2>Map overlay</h2>
-  <div class="heat-toggle">
-    <button id="heat-none" class="active" onclick="setHeat('none')">Off</button>
-    <button id="heat-value" onclick="setHeat('value')">Land value</button>
-    <button id="heat-distressed" onclick="setHeat('distressed')">Distressed concentration</button>
-  </div>
-
-  <h2>Skip Tracing (your own Tracerfy account)</h2>
+  <span class="stage-label">2. SCREEN &amp; PRIORITIZE</span>
+  <h2>Filter &amp; sort</h2>
   <p style="font-size:11px; color:#666; margin:2px 0 6px;">
-    Every lookup bills YOUR OWN Tracerfy account directly -- this site never
-    sees or pays for it. No account? <a href="https://www.tracerfy.com/" target="_blank">Sign up at tracerfy.com</a>.
-  </p>
-  <label>Tracerfy API key</label>
-  <input id="tracerfy_key" type="password" placeholder="paste your Tracerfy key">
-  <button onclick="skipTraceAll()">Skip Trace All Results</button>
-  <div id="skiptrace-status" style="font-size:12px; color:#666; margin-top:4px;"></div>
-
-  <h2>Screen &amp; prioritize</h2>
-  <p style="font-size:11px; color:#666; margin:2px 0 6px;">
-    These filters/sort work instantly on results you already have -- free, no new Realie tokens spent.
-    Nothing is deleted from your result set, only reordered/hidden from view.
+    Instant, free, works on results you already have -- no new Realie tokens spent.
+    Nothing is deleted, only reordered/hidden from view.
   </p>
   <div class="filter-grid">
     <div>
@@ -198,6 +201,13 @@
   <button type="button" class="clear-filters" onclick="clearFilters()">Clear all filters</button>
   <div id="filter-status"></div>
 
+  <h2>Map overlay</h2>
+  <div class="heat-toggle">
+    <button id="heat-none" class="active" onclick="setHeat('none')">Off</button>
+    <button id="heat-value" onclick="setHeat('value')">Land value</button>
+    <button id="heat-distressed" onclick="setHeat('distressed')">Distressed concentration</button>
+  </div>
+
   <h2>Priority Picks</h2>
   <p style="font-size:11px; color:#666; margin:2px 0 6px;">
     Answers "of these results, which deserve my attention first?" -- combines instant signals
@@ -215,10 +225,28 @@
   <div id="score-status" style="font-size:11px; color:#666; margin-top:4px;"></div>
   <div id="results"></div>
 
+  <span class="stage-label">3. RESEARCH &rarr; CONTACT OWNER &rarr; DUE DILIGENCE &rarr; OFFER/NEGOTIATE</span>
   <h2>Parcel detail</h2>
-  <div id="detail">Click a result or map marker to see the full report.</div>
+  <div id="detail">Click a result or map marker to see the full report. Every parcel report walks through: is it worth pursuing, why, the risks, who owns it, what to verify, what to say to the owner, who it fits as a buyer, and comps to check before an offer.</div>
 
+  <span class="stage-label">CONTACT OWNER</span>
+  <h2>Skip Tracing (your own Tracerfy account)</h2>
+  <p style="font-size:11px; color:#666; margin:2px 0 6px;">
+    Every lookup bills YOUR OWN Tracerfy account directly -- this site never
+    sees or pays for it. No account? <a href="https://www.tracerfy.com/" target="_blank">Sign up at tracerfy.com</a>.
+  </p>
+  <label>Tracerfy API key</label>
+  <input id="tracerfy_key" type="password" placeholder="paste your Tracerfy key">
+  <button onclick="skipTraceAll()">Skip Trace All Results</button>
+  <div id="skiptrace-status" style="font-size:12px; color:#666; margin-top:4px;"></div>
+
+  <span class="stage-label">DUE DILIGENCE</span>
   <h2>Tax delinquency lookup (8 places only)</h2>
+  <p style="font-size:11px; color:#666; margin:2px 0 6px;">
+    Manual cross-check for the 8 counties/cities this toolkit has a direct government tax-
+    delinquency feed for -- a supplement to the automatic tax/lien flag already shown per result,
+    for confirming specifics with the county's own record before an offer.
+  </p>
   <label>Place</label>
   <select id="delinquency-place">
     {% for key, place in delinquency_checks.items() %}
@@ -888,17 +916,106 @@ function renderEvidenceReport(container, evidence) {
     container.appendChild(row);
   });
 
-  if (evidence.what_to_verify_next && evidence.what_to_verify_next.length) {
-    container.appendChild(el('h3', {text: 'What to verify next'}));
-    const ul = el('ul');
-    ul.style.fontSize = '11px';
-    ul.style.paddingLeft = '18px';
-    evidence.what_to_verify_next.slice(0, 6).forEach(step => ul.appendChild(el('li', {text: step})));
-    container.appendChild(ul);
-  }
-
+  // The flat "what to verify next" list used to live here too -- it's
+  // now its own first-class Due Diligence Checklist section, rendered
+  // above this evidence report (see renderDueDiligenceChecklist). Every
+  // finding below still carries its own "Verify next" line, so nothing
+  // is lost, just de-duplicated.
   container.appendChild(el('h3', {text: 'Every finding, in detail'}));
   (evidence.findings || []).forEach(f => container.appendChild(renderFindingCard(f)));
+}
+
+function renderBuyerFit(container, buyerFit) {
+  if (!buyerFit || !buyerFit.length) return;
+  container.appendChild(el('div', {className: 'stage-label', text: 'OFFER/NEGOTIATE -- buyer fit'}));
+  const row = el('div', {className: 'buyer-fit-row'});
+  buyerFit.forEach(t => {
+    const tag = el('span', {className: 'buyer-fit-tag', text: t.tag});
+    tag.title = t.reason;
+    row.appendChild(tag);
+  });
+  container.appendChild(row);
+}
+
+function renderOutreachList(box, title, items, cls) {
+  if (!items || !items.length) return;
+  box.appendChild(el('div', {className: 'finding-row' + (cls ? ' ' + cls : ''), text: title}));
+  const ul = el('ul', {className: 'outreach-list'});
+  items.forEach(x => ul.appendChild(el('li', {text: x})));
+  box.appendChild(ul);
+}
+
+function renderOutreachBrief(container, brief) {
+  if (!brief || brief.error) return;
+  container.appendChild(el('div', {className: 'stage-label', text: 'CONTACT OWNER'}));
+  const box = el('div', {className: 'outreach-box'});
+  box.appendChild(el('h4', {text: 'Before you call: what to know & what to ask'}));
+  box.appendChild(el('div', {className: 'finding-row', text: brief.property_summary}));
+  box.appendChild(el('div', {className: 'finding-row', text: 'Owner: ' + brief.owner_summary}));
+  if (brief.absentee_note) box.appendChild(el('div', {className: 'finding-row limitation', text: brief.absentee_note}));
+
+  renderOutreachList(box, 'Why this could be worth pursuing:', brief.why_reaching_out);
+  renderOutreachList(box, 'Questions to ask the owner:', brief.questions_to_ask);
+  renderOutreachList(box, "Be careful about (don't necessarily raise this directly):", brief.caution_notes, 'limitation');
+
+  box.appendChild(el('div', {className: 'disclaimer-banner', text: brief.disclaimer}));
+
+  const copyBtn = el('button', {className: 'copy-btn', text: 'Copy outreach notes'});
+  copyBtn.onclick = () => {
+    const lines = [
+      brief.property_summary, 'Owner: ' + brief.owner_summary, brief.absentee_note || '',
+      '', 'Why reaching out:', ...(brief.why_reaching_out || []).map(x => '- ' + x),
+      '', 'Questions to ask:', ...(brief.questions_to_ask || []).map(x => '- ' + x),
+      '', 'Be careful about:', ...(brief.caution_notes || []).map(x => '- ' + x),
+    ].filter(Boolean).join('\n');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(lines).then(
+        () => { copyBtn.textContent = 'Copied!'; setTimeout(() => copyBtn.textContent = 'Copy outreach notes', 1500); },
+        () => { copyBtn.textContent = 'Could not copy'; }
+      );
+    }
+  };
+  box.appendChild(copyBtn);
+  container.appendChild(box);
+}
+
+function renderDueDiligenceChecklist(container, evidence) {
+  if (!evidence || evidence.error || !evidence.what_to_verify_next || !evidence.what_to_verify_next.length) return;
+  container.appendChild(el('div', {className: 'stage-label', text: 'DUE DILIGENCE'}));
+  container.appendChild(el('h4', {text: 'Checklist before you make an offer'}));
+  const hint = el('div', {className: 'finding-row', text: 'Not a substitute for title, survey, engineering, environmental, septic, or zoning verification -- these are the specific items this screening surfaced for this parcel.'});
+  hint.style.color = '#666';
+  container.appendChild(hint);
+  evidence.what_to_verify_next.forEach((step, i) => {
+    const item = el('div', {className: 'checklist-item'});
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.id = `dd-check-${i}`;
+    item.appendChild(cb);
+    const label = document.createElement('label');
+    label.htmlFor = cb.id;
+    label.textContent = step;
+    item.appendChild(label);
+    container.appendChild(item);
+  });
+}
+
+function renderComps(container, listingLinks) {
+  container.appendChild(el('div', {className: 'stage-label', text: 'OFFER/NEGOTIATE -- check comps'}));
+  container.appendChild(el('h4', {text: 'Check comps before you offer'}));
+  if (!listingLinks || !Object.keys(listingLinks).length) {
+    container.appendChild(el('div', {className: 'finding-row', text: 'No property address on file to build comp-search links for this parcel.'}));
+    return;
+  }
+  const LABELS = {zillow: 'Zillow', land_com: 'Land.com', realtor_com: 'Realtor.com', homes_com: 'Homes.com'};
+  const row = el('div', {className: 'comps-links'});
+  Object.entries(listingLinks).forEach(([key, url]) => {
+    const a = document.createElement('a');
+    a.href = url; a.target = '_blank'; a.rel = 'noopener';
+    a.textContent = `Search ${LABELS[key] || key} →`;
+    row.appendChild(a);
+  });
+  container.appendChild(row);
 }
 
 async function loadParcelDetail(apn) {
@@ -908,12 +1025,14 @@ async function loadParcelDetail(apn) {
   detailEl.textContent = 'Loading full evidence report...';
   const resp = await fetch(`/api/parcel/${encodeURIComponent(apn)}/report`, {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({raw: r.raw}),
+    body: JSON.stringify({raw: r.raw, acres: r.acres}),
   });
   const data = await resp.json();
   detailEl.innerHTML = '';
   if (data.error) { detailEl.textContent = 'Error: ' + data.error; return; }
 
+  detailEl.appendChild(el('div', {className: 'disclaimer-banner', text:
+    'Screening result only -- not a substitute for title, survey, county, engineering, environmental, septic, or zoning verification by a licensed professional.'}));
   detailEl.appendChild(el('h3', {text: `APN: ${data.apn}`}));
 
   const owner = data.current_owner || {};
@@ -934,6 +1053,7 @@ async function loadParcelDetail(apn) {
     detailEl.appendChild(flagRow);
   }
 
+  // Answers "is this worth pursuing, why, and what are the risks" (Level 1+2).
   renderDecisionSummary(detailEl, data.decision || {});
 
   if (r && data.decision && !data.decision.error) {
@@ -941,6 +1061,15 @@ async function loadParcelDetail(apn) {
     saveResultsToStorage();
     refreshView();
   }
+
+  // Answers "is this likely to fit a buyer's criteria."
+  renderBuyerFit(detailEl, data.buyer_fit);
+  // Answers "what should I use when speaking with the owner."
+  renderOutreachBrief(detailEl, data.outreach_brief);
+  // Answers "what should I verify" as an explicit, printable checklist.
+  renderDueDiligenceChecklist(detailEl, data.evidence || {});
+  // Supports the offer/negotiate step -- comps, not a suggested price.
+  renderComps(detailEl, data.listing_links);
 
   const evidenceToggle = el('span', {className: 'level-toggle', text: 'Show full evidence report (every category, source & limitation)'});
   const evidenceBox = el('div', {className: 'level-section'});

@@ -3810,6 +3810,166 @@ def build_decision_summary(evidence: dict, buildability: dict, tax_flags: dict) 
 
 
 # --------------------------------------------------------------------------
+# Buyer fit + Owner Outreach Brief -- the CONTACT OWNER / OFFER-NEGOTIATE
+# steps of the wholesaling workflow this toolkit is built around:
+#   DISCOVER -> SCREEN -> PRIORITIZE -> RESEARCH -> CONTACT OWNER ->
+#   DUE DILIGENCE -> OFFER/NEGOTIATE
+# Both functions are pure synthesis over data already computed above --
+# zero new network calls -- and both deliberately stop short of two
+# things this toolkit has no real basis to provide: a suggested offer
+# or market price (there is no comp-sale data pipeline here, only links
+# to go check comps yourself -- see build_listing_search_links), and
+# anything resembling legal or contract advice. Every wholesaler-facing
+# string from these two functions is expected to carry, or sit next to,
+# the same standing disclaimer: this is a screening/research aid, not a
+# substitute for title, survey, county, engineering, environmental,
+# septic, or zoning verification by a licensed professional.
+# --------------------------------------------------------------------------
+
+OUTREACH_DISCLAIMER = (
+    "Generated from public/government data and search-time signals only -- not verified with "
+    "the owner, the county, a title company, or any licensed professional. Confirm anything "
+    "material (access, taxes, condition, zoning) before making an offer or signing anything."
+)
+
+def build_buyer_fit_tags(acres: float | None, buildability: dict, evidence: dict) -> list[dict]:
+    """
+    Tags a parcel with which kind of buyer it's likely to fit -- a
+    wholesaler typically works several buyer lists at once (owner-
+    builders, land bankers, recreational buyers, infill developers) and
+    needs to know fast which list a given parcel belongs on. A parcel
+    can match more than one tag; every tag names the concrete number(s)
+    behind it, never a vibe.
+    """
+    tags: list[dict] = []
+    buildability = buildability or {}
+    nearby = buildability.get("nearby_development") or {}
+    building_count = nearby.get("nearby_building_count")
+    by_cat = {f["category"]: f for f in (evidence or {}).get("findings", [])}
+    physical = by_cat.get("Physical usable area (screening only)")
+    road = by_cat.get("Physical road access")
+
+    if acres is not None and acres <= 3:
+        bits = [f"{acres:.2f} acres (single home-site scale)"]
+        if road and road["status"] == STATUS_CLEAR:
+            bits.append("mapped road access")
+        if isinstance(building_count, (int, float)) and building_count >= 5:
+            bits.append(f"{int(building_count)} buildings nearby")
+        tags.append({"tag": "Owner-builder / small residential lot buyers", "reason": "; ".join(bits) + "."})
+
+    if acres is not None and acres >= 10:
+        tags.append({
+            "tag": "Land banking / hold-for-appreciation buyers",
+            "reason": f"{acres:.2f} acres -- large raw acreage is often bought to hold, independent of near-term buildability.",
+        })
+    elif acres is not None and 3 < acres < 10:
+        rural = isinstance(building_count, (int, float)) and building_count < 5
+        tags.append({
+            "tag": "Recreational / rural acreage buyers",
+            "reason": f"{acres:.2f} acres, " + ("low nearby building density (rural context)." if rural else "moderate nearby development."),
+        })
+
+    if isinstance(building_count, (int, float)) and building_count >= 15:
+        tags.append({
+            "tag": "Infill / near-town buyers",
+            "reason": f"{int(building_count)} buildings mapped within 400m -- an established, built-up area.",
+        })
+
+    if physical and physical["status"] == STATUS_CONCERN:
+        tags.append({
+            "tag": "Discount / as-is opportunistic buyers only",
+            "reason": f"{physical['establishes']} Likely a harder sell to a buyer planning to build soon.",
+        })
+
+    if not tags:
+        tags.append({"tag": "Not enough data yet for a buyer-fit read", "reason": "Acreage or screening data is missing for this parcel."})
+    return tags
+
+
+# Maps an evidence finding (category + the status that should trigger it)
+# to a plain, conversational question a wholesaler can actually ask an
+# owner on the phone -- turning "verify X" (aimed at the wholesaler) into
+# "ask the owner about X" (aimed at the conversation). Every question
+# traces back to a specific, real finding; nothing here is invented.
+_OWNER_QUESTION_MAP = [
+    ("Physical road access", STATUS_CONCERN, "How do you currently get to the property? No mapped road was found in this toolkit's data, so it's worth asking directly."),
+    ("Septic / sanitation", STATUS_CONCERN, "Has a septic system, well, or perc test ever been done on the property?"),
+    ("Septic / sanitation", STATUS_CAUTION, "Has a septic system, well, or perc test ever been done on the property?"),
+    ("Wetlands", STATUS_CAUTION, "Are you aware of any standing water, wet areas, or drainage issues on the property?"),
+    ("Flood / floodway", STATUS_CONCERN, "Has the property ever flooded, or do you carry flood insurance on it?"),
+    ("Zoning", STATUS_UNKNOWN, "Do you know the current zoning, or has anyone ever tried to get a building permit on it?"),
+    ("Slope / terrain", STATUS_CONCERN, "Is the lot fairly flat, or does it have a noticeable slope or grade change?"),
+]
+
+
+def build_owner_outreach_brief(
+    current_owner: dict, owner_mailing: dict, tax_flags: dict, instant_priority: dict,
+    decision: dict, evidence: dict, acres: float | None,
+    property_city: str | None, property_state: str | None,
+) -> dict:
+    """
+    Synthesizes everything already computed into a short "what to know
+    before you call" brief -- the CONTACT OWNER step of the workflow.
+    Not a CRM: nothing here is saved, logged, or tracked across calls;
+    it's regenerated fresh from the parcel's own data every time.
+    """
+    property_summary = (
+        f"{acres:.2f} acres in {property_city or 'an unknown city'}, {property_state or '?'}"
+        if acres else f"Parcel in {property_city or 'an unknown city'}, {property_state or '?'}"
+    )
+
+    owner_name = (current_owner or {}).get("owner_name") or "Unknown owner name"
+    owner_type = (current_owner or {}).get("owner_type")
+    years = (current_owner or {}).get("ownership_years")
+    owner_bits = [owner_name]
+    if owner_type and owner_type != "unknown":
+        owner_bits.append(f"({owner_type})")
+    if isinstance(years, (int, float)):
+        owner_bits.append(f"-- owned {years:.0f} years")
+    owner_summary = " ".join(owner_bits)
+
+    mail_city = (owner_mailing or {}).get("mail_city")
+    mail_state = (owner_mailing or {}).get("mail_state")
+    absentee_note = None
+    if mail_state and property_state and mail_state.upper() != property_state.upper():
+        absentee_note = f"Mailing address is out of state ({mail_city}, {mail_state}) -- likely does not live at or near the property."
+    elif mail_city and property_city and mail_city.upper() != property_city.upper():
+        absentee_note = f"Mailing address ({mail_city}) is a different city than the property."
+
+    why_reaching_out = list((instant_priority or {}).get("reasons") or [])
+    if decision:
+        why_reaching_out += list(decision.get("top_positive_factors") or [])[:2]
+
+    by_cat = {f["category"]: f for f in (evidence or {}).get("findings", [])}
+    questions: list[str] = []
+    for cat, trigger_status, question in _OWNER_QUESTION_MAP:
+        f = by_cat.get(cat)
+        if f and f["status"] == trigger_status and question not in questions:
+            questions.append(question)
+    if tax_flags and tax_flags.get("flagged"):
+        questions.append("Are there any back taxes or liens on the property, and what's the plan to resolve them?")
+    questions.append("Are you the sole owner, or does anyone else need to sign off on a sale?")
+    if not questions:
+        questions.append("No specific red flags to probe -- confirm general condition, access, and that they're the decision-maker on a sale.")
+
+    caution_notes = []
+    if decision:
+        caution_notes = list(decision.get("deal_killer_risks") or [])[:3]
+        if not caution_notes:
+            caution_notes = list(decision.get("top_risks") or [])[:3]
+
+    return {
+        "property_summary": property_summary,
+        "owner_summary": owner_summary,
+        "absentee_note": absentee_note,
+        "why_reaching_out": why_reaching_out[:5],
+        "questions_to_ask": questions[:6],
+        "caution_notes": caution_notes,
+        "disclaimer": OUTREACH_DISCLAIMER,
+    }
+
+
+# --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
 
