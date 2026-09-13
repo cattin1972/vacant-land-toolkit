@@ -1,0 +1,410 @@
+<!doctype html>
+<title>Vacant Land Toolkit Audit</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --paper:#EFF1EC; --paper-raised:#E4E7E0; --ink:#1A2420; --ink-dim:#4B564F;
+    --line:#C9CFC4; --accent:#2B6E63; --accent-soft:#DCE7E2; --structural:#8B5A2B;
+    --critical:#B23A2E; --critical-soft:#F3DEDA; --warning:#C68A1F; --warning-soft:#F3E7D0;
+    --good:#3E7D5C; --good-soft:#DCEBE1; --chip-ink:#1A2420;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#14181A; --paper-raised:#1D2325; --ink:#E4E8E3; --ink-dim:#9CA8A0;
+      --line:#33403A; --accent:#5FB3A3; --accent-soft:#1E2E2A; --structural:#C89354;
+      --critical:#E27668; --critical-soft:#3A2320; --warning:#E0B054; --warning-soft:#332711;
+      --good:#7FC79E; --good-soft:#1B2E22; --chip-ink:#14181A;
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#14181A; --paper-raised:#1D2325; --ink:#E4E8E3; --ink-dim:#9CA8A0;
+    --line:#33403A; --accent:#5FB3A3; --accent-soft:#1E2E2A; --structural:#C89354;
+    --critical:#E27668; --critical-soft:#3A2320; --warning:#E0B054; --warning-soft:#332711;
+    --good:#7FC79E; --good-soft:#1B2E22; --chip-ink:#14181A;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:"Source Serif 4", Georgia, serif; line-height:1.6;
+    padding-inline:20px; padding-block:0 64px;
+  }
+  h1,h2,h3{font-family:"Fraunces", Georgia, serif; text-wrap:balance; color:var(--ink); font-weight:600;}
+  .mono{font-family:"IBM Plex Mono", ui-monospace, monospace;}
+  a{color:var(--accent);}
+  .wrap{max-width:760px; margin-inline:auto;}
+
+  /* Masthead */
+  .masthead{padding-block:36px 20px; border-bottom:2px solid var(--ink);}
+  .eyebrow{font-family:"IBM Plex Mono"; font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-dim);}
+  .masthead h1{font-size:clamp(28px,7vw,42px); margin:8px 0 6px; font-weight:700; font-optical-sizing:auto;}
+  .masthead p{color:var(--ink-dim); margin:0; max-width:60ch;}
+  .meta-row{display:flex; flex-wrap:wrap; gap:6px 18px; margin-top:14px; font-family:"IBM Plex Mono"; font-size:12px; color:var(--ink-dim);}
+
+  /* Stat strip */
+  .stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); margin-block:24px;}
+  .stat{background:var(--paper); padding:14px 12px;}
+  .stat .n{font-family:"IBM Plex Mono"; font-size:26px; font-weight:600; font-variant-numeric:tabular-nums; color:var(--accent);}
+  .stat .l{font-size:11px; color:var(--ink-dim); text-transform:uppercase; letter-spacing:.06em; font-family:"IBM Plex Mono";}
+
+  section{margin-top:44px;}
+  section > h2{font-size:22px; border-bottom:1px solid var(--line); padding-bottom:8px; margin-bottom:16px;}
+  .section-lede{color:var(--ink-dim); margin-top:-8px; margin-bottom:18px; font-size:15px;}
+
+  /* Severity chip */
+  .chip{display:inline-flex; align-items:center; gap:5px; font-family:"IBM Plex Mono"; font-size:10.5px; letter-spacing:.04em; text-transform:uppercase; padding:2px 8px; border-radius:3px; font-weight:500; white-space:nowrap;}
+  .chip.critical{background:var(--critical-soft); color:var(--critical);}
+  .chip.warning{background:var(--warning-soft); color:var(--warning);}
+  .chip.good{background:var(--good-soft); color:var(--good);}
+  .chip.neutral{background:var(--paper-raised); color:var(--ink-dim); border:1px solid var(--line);}
+
+  /* Letter-grid findings */
+  .findings-nav{display:flex; flex-wrap:wrap; gap:6px; margin-bottom:22px;}
+  .findings-nav a{font-family:"IBM Plex Mono"; font-size:11px; width:26px; height:26px; display:flex; align-items:center; justify-content:center; border:1px solid var(--line); border-radius:3px; text-decoration:none; color:var(--ink-dim);}
+  .findings-nav a:hover{border-color:var(--accent); color:var(--accent);}
+
+  .finding{border:1px solid var(--line); border-left:3px solid var(--structural); background:var(--paper-raised); padding:16px 18px; margin-bottom:14px; border-radius:0 4px 4px 0; scroll-margin-top:16px;}
+  .finding-head{display:flex; align-items:baseline; gap:10px; margin-bottom:6px; flex-wrap:wrap;}
+  .finding-letter{font-family:"Fraunces"; font-weight:700; font-size:20px; color:var(--structural);}
+  .finding h3{font-size:16px; margin:0; display:inline;}
+  .finding p{margin:6px 0 0; font-size:14.5px;}
+  .finding ul{margin:8px 0 0; padding-left:20px; font-size:14.5px;}
+  .finding li{margin-bottom:4px;}
+
+  /* Ranked list */
+  .ranked{list-style:none; margin:0; padding:0; counter-reset:rank;}
+  .ranked li{counter-increment:rank; display:grid; grid-template-columns:40px 1fr; gap:14px; padding:14px 0; border-bottom:1px solid var(--line);}
+  .ranked li::before{content:counter(rank); font-family:"IBM Plex Mono"; font-weight:600; font-size:18px; color:var(--critical); font-variant-numeric:tabular-nums;}
+  .ranked li:nth-child(n+6)::before{color:var(--warning);}
+  .ranked li:nth-child(n+13)::before{color:var(--ink-dim);}
+  .ranked .item-title{font-weight:600; margin-bottom:3px;}
+  .ranked .item-body{font-size:14px; color:var(--ink-dim);}
+
+  /* Roadmap */
+  .roadmap{border-left:2px solid var(--line); margin-left:8px; padding-left:24px;}
+  .phase{position:relative; padding-bottom:32px;}
+  .phase::before{content:""; position:absolute; left:-29px; top:4px; width:12px; height:12px; border-radius:50%; background:var(--accent); border:2px solid var(--paper);}
+  .phase-tag{font-family:"IBM Plex Mono"; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--accent);}
+  .phase h3{margin:2px 0 8px; font-size:19px;}
+  .phase ul{margin:0; padding-left:20px; font-size:14.5px;}
+  .phase li{margin-bottom:5px;}
+
+  .callout{background:var(--accent-soft); border:1px solid var(--accent); border-radius:4px; padding:16px 18px; font-size:14.5px; margin:20px 0;}
+  .callout b{color:var(--accent);}
+
+  footer{margin-top:56px; padding-top:20px; border-top:1px solid var(--line); font-size:12.5px; color:var(--ink-dim); font-family:"IBM Plex Mono";}
+
+  @media (max-width:480px){
+    .finding-head{flex-direction:column; gap:2px;}
+    .ranked li{grid-template-columns:28px 1fr; gap:10px;}
+  }
+</style>
+
+<div class="wrap">
+
+  <div class="masthead">
+    <div class="eyebrow">Product &amp; Engineering Audit — No code changed</div>
+    <h1>Vacant Land Toolkit</h1>
+    <p>A complete audit of the existing application, verified directly against the current codebase on 2026‑09‑13 — not a rewrite proposal, not a wishlist. Findings first, roadmap second, your approval before anything is implemented.</p>
+    <div class="meta-row">
+      <span>vacant_land_search.py · 2,914 lines</span>
+      <span>webapp/app.py · 328 lines</span>
+      <span>index.html · 399 lines</span>
+      <span>Render (free tier) · onrender.com</span>
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="n">62</div><div class="l">Functions audited</div></div>
+    <div class="stat"><div class="n">18</div><div class="l">Live data sources</div></div>
+    <div class="stat"><div class="n">20</div><div class="l">Ranked findings</div></div>
+    <div class="stat"><div class="n">0</div><div class="l">Accounts / billing</div></div>
+    <div class="stat"><div class="n">2</div><div class="l">Counties with zoning</div></div>
+  </div>
+
+  <div class="callout">
+    <b>Headline finding, before anything else:</b> the single-parcel report page currently renders as a raw JSON dump inside a plain-text box — no formatted sections, no verdict, no visual hierarchy. Every buildability check underneath it is genuinely real and well-built. None of that shows up as a product yet. That gap, more than any missing feature, is what separates this from "world-class" today.
+  </div>
+
+  <section id="architecture">
+    <h2>A · Current architecture</h2>
+    <p class="section-lede">One Python module holds all business logic; a thin, deliberately stateless Flask layer serves it; the browser is the only place a customer's session data lives.</p>
+    <ul>
+      <li><b>Backend</b> — a single flat module (<span class="mono">vacant_land_search.py</span>, 2,914 lines) covering search, buildability, tax, zoning, skip tracing, and CSV/mail export. No package structure yet — everything is one file.</li>
+      <li><b>Web layer</b> — Flask (<span class="mono">webapp/app.py</span>). Rebuilt 2026‑09‑12 to hold <em>zero</em> server-side session state: every parcel's raw data is sent to the browser at search time and handed back on every follow‑up call. Correct call for a multi‑subscriber product — see Finding E‑1.</li>
+      <li><b>Frontend</b> — one HTML file, inline CSS/JS, no build step, no framework. Functional, not yet a product surface.</li>
+      <li><b>Hosting</b> — Render free tier, single 0.5 CPU instance, no database, no queue, no CDN, spins down after 15 minutes idle.</li>
+      <li><b>Persistence</b> — none server-side. Search results persist only in the browser's <span class="mono">localStorage</span>.</li>
+      <li><b>Deploy</b> — GitHub → Render, direct to production. No staging environment, no automated test gate before a push goes live.</li>
+    </ul>
+  </section>
+
+  <section id="features">
+    <h2>B · Current features (verified against the live code, not the feature list you handed in)</h2>
+    <ul>
+      <li>Vacant‑land search via Realie, hard two‑signal filter (use code <em>and</em> zero building area) to exclude anything with a structure</li>
+      <li>Acreage / county / city filtering</li>
+      <li>Current owner name, entity type, price paid, ownership duration</li>
+      <li>Owner mailing address, correctly separated from the parcel's own site address</li>
+      <li>Tax assessment values; tax/lien/foreclosure flags from Realie's own data</li>
+      <li>Tax delinquency lookup for 8 places with real government APIs — <b>only 7 are wired into the website.</b> New York City's lien‑sale check is fully built and tested in the backend but absent from the live UI (Finding R‑7).</li>
+      <li>Full buildability report: flood/wetland (parcel‑exact), septic suitability, 17‑hazard risk index, road access, coastal/habitat designations, nearby‑development proxy, slope, contamination, fine‑grained wildfire, broadband</li>
+      <li>Zoning district lookup for exactly two counties nationwide (unincorporated Miami‑Dade FL, unincorporated King County WA) — district name only, never setbacks or FAR</li>
+      <li>Map with severity‑colored markers and two heatmap overlays (land value, distressed concentration)</li>
+      <li>CSV export in mail‑merge order, owner mailing address prioritized over the property's own address</li>
+      <li>Skip tracing via the customer's own Tracerfy account, single and bulk, with a pre‑spend cost estimate</li>
+      <li>Print view; results persisted in the browser across refreshes</li>
+      <li>Dormant, unused: Regrid/ATTOM paid search path, a full PostGIS schema, a non‑functional contractor/permit stub</li>
+    </ul>
+  </section>
+
+  <section id="data-sources">
+    <h2>C · Current data sources</h2>
+    <ul>
+      <li><b>Realie.ai</b> — parcel search, owner, valuation. Paid (25 free tokens/mo), bring‑your‑own‑key.</li>
+      <li><b>Tracerfy.com</b> — skip tracing, ~$0.10/lookup typical, bring‑your‑own‑key, live‑confirmed working.</li>
+      <li><b>8 government tax‑delinquency sources</b> — King County WA, Pittsburgh PA, Philadelphia PA, Norfolk VA, Sonoma County CA, Richmond VA, Cache County UT, NYC. All real, official, free APIs — no nationwide source exists.</li>
+      <li><b>9 free federal data sources</b> — FEMA (flood + National Risk Index), USFWS (wetlands, critical habitat, coastal barriers), USDA (soil/septic), Census TIGERweb (roads), USGS (elevation), EPA (Superfund, Brownfields), USFS (wildfire), FCC (broadband), OpenStreetMap Overpass.</li>
+      <li><b>2 free zoning sources</b> — ArcGIS layers for Miami‑Dade and King County only.</li>
+      <li><b>Regrid / ATTOM</b> — paid, integrated in code, never tested against a live account, not connected.</li>
+    </ul>
+  </section>
+
+  <section id="strengths">
+    <h2>D · Strengths</h2>
+    <ul>
+      <li>Genuinely differentiated depth — a competitive audit run earlier found no single competitor combining verified vacancy, septic, contamination, road access, broadband, 17‑hazard risk, and real tax‑delinquency dollar amounts in one product.</li>
+      <li>A real track record of live‑testing catching production bugs before customers did — wrong auth header formats, a misattributed zoning source, a cumulative‑vs‑per‑year tax field, EPA field‑name casing.</li>
+      <li>Zero‑liability architecture for the two paid data sources — bring‑your‑own‑key avoids a resale model that both providers' own Terms of Service actually prohibit.</li>
+      <li>Correctness‑first backend design — the stateless rebuild specifically closes a cross‑customer data risk, not just a bug.</li>
+      <li>Honest limitation‑disclosure as a habit — most functions already document their own coarseness in code comments. The gap is that none of it reaches the customer‑facing screen (see Finding I‑1).</li>
+    </ul>
+  </section>
+
+  <section id="weaknesses">
+    <h2>E · Weaknesses</h2>
+    <ul>
+      <li><b>E‑1 — </b>Parcel detail is raw JSON in a <span class="mono">&lt;pre&gt;</span>‑style box. No formatted report, no verdict.</li>
+      <li>No accounts, auth, or billing anywhere — nothing can be sold yet.</li>
+      <li>Every buildability check runs against a synthetic ~110‑meter box centered on Realie's coordinate, not the parcel's real boundary — see Finding F‑1, the single biggest accuracy risk in the product.</li>
+      <li>No confidence or data‑completeness signal anywhere in the output.</li>
+      <li>No caching — the same parcel viewed twice re‑runs all ~12 external calls, and a repeat skip trace costs real money again.</li>
+    </ul>
+  </section>
+
+  <section id="accuracy">
+    <h2>F · Accuracy risks</h2>
+    <div class="finding" id="f1">
+      <div class="finding-head"><span class="chip critical">Critical</span><h3>F‑1 — Every polygon-based check runs on a fake parcel shape</h3></div>
+      <p>Realie's search returns a center point, not a boundary. The report endpoint builds a placeholder ~110m box around that point and feeds it to flood/wetland scoring, road‑access, and environmental‑designation checks. The resulting <span class="mono">buildability_score: 98.93</span> looks parcel‑precise. It is not — it's precise to a shape that isn't the parcel. This is disclosed in code comments; it reaches no customer‑facing text at all.</p>
+    </div>
+    <ul>
+      <li>Hazard/NRI data is census‑tract level, already disclosed, but sits next to a %-score that reads as far more precise than it is.</li>
+      <li>Zoning returning nothing looks identical to zoning returning "confirmed clear" — there is no distinct "not covered here" state.</li>
+      <li>No cross‑validation against a second data source for any single fact — one county record, taken as given.</li>
+    </ul>
+  </section>
+
+  <section id="false-positive">
+    <h2>G · False‑positive risks</h2>
+    <ul>
+      <li>Flood/wetland percentage can be thrown off in either direction by the placeholder‑box mismatch, worst on odd‑shaped or coastal lots.</li>
+      <li>Fine‑grained wildfire tier cutoffs are the developer's own rough approximation, not an official USFS breakpoint.</li>
+      <li>A tax/lien flag can fire on data that's already been resolved if the county's own record is stale.</li>
+    </ul>
+  </section>
+
+  <section id="false-negative">
+    <h2>H · False‑negative risks</h2>
+    <ul>
+      <li>Road‑access relies on Census TIGER, which is known to omit legitimate private/rural roads — a real access point can silently read as landlocked.</li>
+      <li>Zoning silence (the common case, 2 counties covered nationwide) can be misread as "no zoning issue" rather than "not checked."</li>
+      <li>The nearby‑development utility proxy can read "likely served" from buildings on a different, unconnected utility grid.</li>
+    </ul>
+  </section>
+
+  <section id="ux">
+    <h2>I · UX problems</h2>
+    <ul>
+      <li><b>I‑1 — </b>No synthesized verdict. The backend already computes a clean <span class="mono">concerns[]</span> list; the UI never elevates it into the "pursue / investigate / pass" answer a user actually wants (your own stated goal #7).</li>
+      <li>No visual severity difference between "landlocked" and "soil somewhat limited" — both currently render as identical plain‑text lines.</li>
+      <li>Fixed 380px sidebar, not responsive — a real problem for a mostly mobile‑first customer base.</li>
+      <li>A report that can take up to ~20 seconds shows only the word "Loading…"</li>
+      <li>The 8‑city tax‑delinquency tool sits disconnected from search results, requiring a customer to already know the target's ID format.</li>
+    </ul>
+  </section>
+
+  <section id="performance">
+    <h2>J · Performance</h2>
+    <ul>
+      <li>Fixed same day as this audit: a 110‑second report load, traced to 10 sequential external calls plus two unbounded retry loops, brought down to a consistent ~10–20 seconds via parallelization and a hard timeout. Still slow for a single click by modern SaaS standards.</li>
+      <li>Zero caching anywhere — identical requests cost identical latency and, for skip tracing, identical real money, every time.</li>
+      <li>Single free‑tier dyno cold‑starts after 15 minutes idle.</li>
+    </ul>
+  </section>
+
+  <section id="security">
+    <h2>K · Security</h2>
+    <ul>
+      <li>No authentication on any endpoint — expected at this stage, but a hard blocker before billing.</li>
+      <li><span class="chip warning">Fixable in minutes</span> <span class="mono">renderResults()</span> builds HTML via string interpolation of externally‑sourced fields (APN, acreage) without escaping — a low‑likelihood but real stored‑content injection path via third‑party data.</li>
+      <li>No rate limiting anywhere — both a cost‑abuse and infrastructure‑abuse surface once public.</li>
+      <li>Philadelphia's tax‑delinquency check already validates its input is numeric before building a raw SQL string — correctly defended, worth calling out as the pattern to replicate elsewhere, not a gap.</li>
+    </ul>
+  </section>
+
+  <section id="api-cost">
+    <h2>L · API‑cost risks</h2>
+    <ul>
+      <li>The Realie search key still supports a server‑side environment‑variable fallback. Today's deployment leaves it unset on purpose so every visitor pays their own way — but nothing in the code prevents a future operator from setting it and silently reverting to "the site owner pays for everyone."</li>
+      <li>No caching means a customer can pay Tracerfy twice for the same owner just by searching the same area again.</li>
+      <li>Free government APIs (Overpass, ArcGIS) were built for light individual use, not concurrent commercial load — no disclosed rate limit, real risk of the shared server IP getting throttled under real traffic.</li>
+    </ul>
+  </section>
+
+  <section id="scalability">
+    <h2>M · Scalability</h2>
+    <ul>
+      <li>No database — no way to store accounts, saved leads, or search history yet.</li>
+      <li>Single dyno, no queue for slow external calls, no horizontal scaling path.</li>
+      <li>Realie's own free‑tier token model caps interactive search volume by design — fine for bring‑your‑own‑key, but rules out "scan an entire state" as a workflow without a paid tier.</li>
+    </ul>
+  </section>
+
+  <section id="legal">
+    <h2>N · Legal / liability</h2>
+    <ul>
+      <li>Buildability, septic, and zoning results could genuinely inform a real purchase decision. Every caveat about their limits lives in code comments a customer will never see — none of it reaches the live product's UI.</li>
+      <li>No Terms of Service or liability limitation live on the actual site (an anti‑scraping ToS draft exists but was never published or broadened into a general agreement).</li>
+      <li>No privacy policy for the PII the product handles — owner names, addresses, phone numbers — even though none of it is stored server‑side today.</li>
+    </ul>
+  </section>
+
+  <section id="competitive">
+    <h2>O · Competitive weaknesses</h2>
+    <ul>
+      <li>No contact info bundled by default — competitors like PropStream and BatchLeads include skip tracing standard; this product requires a separate account.</li>
+      <li>No zoning/setback/FAR data beyond two counties — Buildability™ covers this nationally.</li>
+      <li>No visual polish and no mobile layout — every real competitor is a finished, professional product today.</li>
+      <li>No lightweight CRM/pipeline layer, which several competitors bundle.</li>
+    </ul>
+  </section>
+
+  <section id="missing">
+    <h2>P · Missing capabilities</h2>
+    <ul>
+      <li>No confidence/uncertainty scoring framework of any kind</li>
+      <li>No comps or similar‑recently‑sold signal</li>
+      <li>No saved searches or new‑match alerts</li>
+      <li>No multi‑area or multi‑state search in a single workflow</li>
+      <li>No accounts, billing, or tiered access</li>
+    </ul>
+  </section>
+
+  <section id="simplify">
+    <h2>Q · Should be removed or simplified</h2>
+    <ul>
+      <li>The Regrid/ATTOM search path — untested against a live account, unused, real maintenance surface for zero current value</li>
+      <li>The full PostGIS schema and its three functions — entirely unused by the website</li>
+      <li>The contractor/permit market‑activity stub — already documented in its own code as non‑functional; either hide it or remove it rather than let it sit as dead weight</li>
+    </ul>
+  </section>
+
+  <section id="ranked">
+    <h2>The 20 biggest things standing between this and world‑class</h2>
+    <p class="section-lede">Ordered by combined customer impact and severity — <span class="chip critical" style="margin:0 2px;">1–5</span> <span class="chip warning" style="margin:0 2px;">6–12</span> <span class="chip neutral" style="margin:0 2px;">13–20</span></p>
+    <ol class="ranked">
+      <li><div><div class="item-title">Parcel detail is raw JSON, not a report</div><div class="item-body">Undermines "trustworthy and actionable" more than any single missing feature would.</div></div></li>
+      <li><div><div class="item-title">Buildability runs on a fake placeholder boundary, undisclosed to the customer</div><div class="item-body">The core accuracy claim of the product rests on a synthetic shape, silently.</div></div></li>
+      <li><div><div class="item-title">No accounts or billing</div><div class="item-body">There is currently no way to actually sell this.</div></div></li>
+      <li><div><div class="item-title">No confidence or uncertainty framework</div><div class="item-body">Directly contradicts the stated product philosophy of transparent confidence levels.</div></div></li>
+      <li><div><div class="item-title">No synthesized "pursue or pass" verdict</div><div class="item-body">All the ingredients already exist server‑side; nothing combines them into the one answer a user actually wants.</div></div></li>
+      <li><div><div class="item-title">Zoning covers two counties nationwide</div><div class="item-body">Will mislead by omission unless "not covered" is made explicit and distinct from "clean."</div></div></li>
+      <li><div><div class="item-title">NYC's tax‑lien check is built, tested, and invisible</div><div class="item-body">Finished work not wired into the live product.</div></div></li>
+      <li><div><div class="item-title">Zero caching anywhere</div><div class="item-body">Repeat views cost real latency and, for skip tracing, real money for no reason.</div></div></li>
+      <li><div><div class="item-title">No disclaimers or ToS on the live product</div><div class="item-body">Real legal exposure sits behind buildability and zoning claims a customer could act on.</div></div></li>
+      <li><div><div class="item-title">Unescaped HTML interpolation of externally‑sourced fields</div><div class="item-body">Low likelihood, real, and fixable in minutes.</div></div></li>
+      <li><div><div class="item-title">No rate limiting or cost governance</div><div class="item-body">A cost and abuse risk the moment this is public.</div></div></li>
+      <li><div><div class="item-title">Not mobile‑responsive</div><div class="item-body">A fixed 380px sidebar, for a customer base that is frequently on a phone in the field.</div></div></li>
+      <li><div><div class="item-title">Single point of failure hosting</div><div class="item-body">One free dyno, no monitoring, no uptime tracking.</div></div></li>
+      <li><div><div class="item-title">No multi‑area search</div><div class="item-body">Forces repetitive single‑city searches with no batching.</div></div></li>
+      <li><div><div class="item-title">Dormant code creates ambiguity</div><div class="item-body">Regrid/ATTOM, PostGIS, and the market‑activity stub blur what's real versus aspirational.</div></div></li>
+      <li><div><div class="item-title">No automated test gate before deploy</div><div class="item-body">A bad push can reach production undetected.</div></div></li>
+      <li><div><div class="item-title">Free government APIs, untested at commercial scale</div><div class="item-body">Overpass and ArcGIS could throttle the shared server IP under real concurrent load.</div></div></li>
+      <li><div><div class="item-title">A silent config foot‑gun</div><div class="item-body">Setting <span class="mono">REALIE_API_KEY</span> on the server would quietly revert the whole "customers pay their own way" model.</div></div></li>
+      <li><div><div class="item-title">No severity hierarchy in the concerns list</div><div class="item-body">A landlocked parcel and a minor soil note currently look identical.</div></div></li>
+      <li><div><div class="item-title">No comps, trends, or saved alerts</div><div class="item-body">Strong at finding and screening; nothing yet helps a user act with market context or follow up over time.</div></div></li>
+    </ol>
+  </section>
+
+  <section id="roadmap">
+    <h2>Proposed roadmap — awaiting your approval</h2>
+    <p class="section-lede">No implementation begins until you say go. Each phase is scoped to be shippable on its own.</p>
+    <div class="roadmap">
+      <div class="phase">
+        <div class="phase-tag">Phase 1</div>
+        <h3>Critical correctness &amp; trust</h3>
+        <ul>
+          <li>Disclose the placeholder‑boundary limitation directly in every buildability report</li>
+          <li>Make "not covered" visually distinct from "checked, clean" everywhere (zoning first)</li>
+          <li>Add a real disclaimer / liability‑limitation notice to the live site</li>
+          <li>Fix the unescaped‑HTML interpolation in the results list</li>
+          <li>Wire the already‑built NYC lien check into the live UI</li>
+          <li>Cache report and buildability results within a session</li>
+          <li>Remove or hard‑gate the <span class="mono">REALIE_API_KEY</span> server fallback</li>
+        </ul>
+      </div>
+      <div class="phase">
+        <div class="phase-tag">Phase 2</div>
+        <h3>Core product</h3>
+        <ul>
+          <li>Replace the raw‑JSON parcel detail with a real formatted report</li>
+          <li>Build the synthesized pursue / investigate / pass verdict with a stated confidence level</li>
+          <li>Visual severity hierarchy for concerns (critical / moderate / minor)</li>
+          <li>Mobile‑responsive layout</li>
+          <li>Cache skip‑trace results so a repeat search never re‑charges the same lookup</li>
+        </ul>
+      </div>
+      <div class="phase">
+        <div class="phase-tag">Phase 3</div>
+        <h3>Competitive differentiation</h3>
+        <ul>
+          <li>Multi‑area / batch search in one workflow</li>
+          <li>A comps signal — similar, recently‑sold nearby parcels</li>
+          <li>Saved searches with new‑match alerting</li>
+          <li>Expand zoning coverage using the same free‑source research method already proven</li>
+          <li>Get a real Zoneomics quote now that there's a product to justify the cost</li>
+        </ul>
+      </div>
+      <div class="phase">
+        <div class="phase-tag">Phase 4</div>
+        <h3>Advanced intelligence</h3>
+        <ul>
+          <li>Historical / trend land‑value signals per area</li>
+          <li>A weighted, multi‑factor deal score beyond a flat concerns list</li>
+          <li>Persistent market‑intelligence dashboard once a database exists</li>
+          <li>Revisit nationwide tax‑delinquency coverage against a paid source, now revenue‑justified</li>
+        </ul>
+      </div>
+      <div class="phase">
+        <div class="phase-tag">Phase 5</div>
+        <h3>Scale, reliability &amp; security</h3>
+        <ul>
+          <li>Real accounts and the membership‑tier billing already planned</li>
+          <li>Rate limiting, uptime monitoring, alerting</li>
+          <li>Automated tests gating every deploy</li>
+          <li>Remove the dormant Regrid/ATTOM and PostGIS code paths</li>
+          <li>A paid hosting tier to remove cold‑starts and give real headroom under concurrent load</li>
+          <li>Full anti‑scraping protections per the plan already drafted</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    Audit performed against the live codebase, 2026‑09‑13. No files were modified. Reply with which phase(s) to approve, or ask for changes to this plan before any implementation begins.
+  </footer>
+
+</div>

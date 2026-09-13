@@ -1,0 +1,44 @@
+Subject: Two documented failures in your billing/verification system — token deducted in violation of your own policy, and a payment hold that never triggered verification
+
+To Realie Support,
+
+Below are two separate, verifiable failures in your systems, both of which I can document precisely. I'm not asking you to take my word for anything — every claim below is either a direct quote from your own published documentation or a screenshot of your own dashboard.
+
+ISSUE 1: A token was deducted on a 403 response, in direct violation of your own published policy.
+
+I made a request to your property search endpoint:
+GET https://app.realie.ai/api/public/property/search/?state=FL&county=Lee&city=Cape+Coral
+
+It returned:
+403 Client Error: Forbidden
+
+Before this request, my account showed 7 tokens remaining for the billing period. Immediately after this single failed request, it showed 6. One token was deducted for a request that did not succeed.
+
+Your own API FAQ (docs.realie.ai/api-reference/faq) states, verbatim:
+
+"[A token is deducted] when the response is 200. Empty lookups (404), authentication failures (401), and monthly token allowance exhaustion (403) do not spend a token."
+
+This is not an edge case I am interpreting generously in my own favor. It is your own written policy, stating explicitly that a 403 does not spend a token. Mine did. Either your documentation is wrong, your billing logic doesn't match your documentation, or both. All three possibilities are your responsibility to fix, not mine to work around.
+
+ISSUE 2: Your payment verification flow silently fails to complete itself, then blocks paying customers from using the product with no clear explanation.
+
+I added a payment card to my account. Your system placed a hold on it — the standard, universally understood mechanism by which a payment processor confirms a card is valid. That hold appeared on my bank statement, confirming your system successfully contacted my bank and validated the card.
+
+Despite this, your API continued rejecting every request with:
+"Forbidden: Verify at least one payment card to continue"
+
+I checked your own Billing Dashboard. The card was listed, set as Default, with a hold already processed — and sitting next to it, a separate "Verify card" button that had never been triggered. Your system performed the verification-equivalent action (the hold) and then did not mark the card as verified, silently leaving the account in a broken state with no notification, no error message at the point of card entry, and no indication anywhere that an additional manual step was required.
+
+A hold succeeding is the industry-standard signal that a card is valid. Every competent payment integration (Stripe, Braintree, and effectively every other processor) treats a successful hold as verification and updates account status automatically. Requiring a second, undocumented manual action after the hold already succeeded — with zero prompt telling the customer this step exists — is not a minor UX gap. It is a broken flow that blocks paying customers from the product they are trying to pay for, and it did exactly that to me.
+
+WHAT I EXPECT:
+
+1. A refund of the token deducted on the 403 in Issue 1, and a direct explanation for why your system charged it in violation of your own documented policy.
+2. An explanation for why card verification did not complete automatically after the hold succeeded in Issue 2, and confirmation that this will not silently recur.
+3. Confirmation, not a generic reply — I have the receipts for both of these, documented above and by screenshot, and I expect a response that addresses each one specifically, not a copy-paste macro.
+
+Account email: [YOUR REALIE ACCOUNT EMAIL HERE]
+Approximate time of Issue 1: [DATE/TIME HERE, e.g. Sep 12, 2026 ~3:xx PM EDT]
+Approximate time of Issue 2: [DATE/TIME HERE, e.g. Sep 12, 2026 ~8:xx PM EDT]
+
+[YOUR NAME]

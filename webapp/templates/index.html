@@ -19,12 +19,49 @@
   .result-item { padding: 6px; border-bottom: 1px solid #eee; cursor: pointer; font-size: 12px; }
   .result-item:hover { background: #f5f5f5; }
   .flagged { color: #b00; font-weight: bold; }
-  #detail { font-size: 12px; white-space: pre-wrap; }
+  #detail { font-size: 12px; }
   .concern { color: #b00; margin: 2px 0; }
   #status { font-size: 12px; color: #666; min-height: 16px; }
   .heat-toggle { display: flex; gap: 6px; margin-top: 6px; }
   .heat-toggle button { flex: 1; font-size: 11px; padding: 5px; }
   .heat-toggle button.active { background: #333; color: #fff; }
+
+  /* Evidence report UI */
+  .verdict-banner { padding: 10px 12px; border-radius: 4px; margin-bottom: 10px; border: 1px solid; }
+  .verdict-banner.promising { background: #e8f5e9; border-color: #4caf50; }
+  .verdict-banner.mixed { background: #fff8e1; border-color: #d4a017; }
+  .verdict-banner.concerns { background: #fdecea; border-color: #c0392b; }
+  .verdict-banner.insufficient { background: #eceff1; border-color: #78909c; }
+  .verdict-title { font-weight: bold; font-size: 13px; margin-bottom: 3px; }
+  .verdict-explain { font-size: 11.5px; color: #444; }
+
+  .bucket-row { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+  .bucket-chip { font-size: 10px; padding: 2px 6px; border-radius: 3px; border: 1px solid #ccc; background: #f5f5f5; cursor: pointer; }
+  .bucket-chip:hover { background: #e8e8e8; }
+
+  .finding-card { border: 1px solid #ddd; border-left: 4px solid #999; border-radius: 3px; padding: 8px 10px; margin-bottom: 8px; }
+  .finding-card.status-CLEAR { border-left-color: #4caf50; }
+  .finding-card.status-CAUTION { border-left-color: #d4a017; }
+  .finding-card.status-CONCERN { border-left-color: #c0392b; }
+  .finding-card.status-UNKNOWN { border-left-color: #78909c; }
+  .finding-title-row { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+  .finding-category { font-weight: bold; font-size: 12.5px; }
+  .status-badge { font-size: 9.5px; font-weight: bold; padding: 1px 6px; border-radius: 8px; color: #fff; white-space: nowrap; }
+  .status-badge.status-CLEAR { background: #4caf50; }
+  .status-badge.status-CAUTION { background: #d4a017; }
+  .status-badge.status-CONCERN { background: #c0392b; }
+  .status-badge.status-UNKNOWN { background: #78909c; }
+  .evidence-badge { font-size: 9px; color: #666; border: 1px solid #ccc; border-radius: 8px; padding: 1px 6px; white-space: nowrap; }
+  .finding-row { font-size: 11px; margin-top: 4px; line-height: 1.4; }
+  .finding-row b { color: #333; }
+  .finding-row.limitation { color: #a05a00; }
+  .finding-row.next-step { color: #145a99; }
+  .finding-toggle { font-size: 10px; color: #666; cursor: pointer; text-decoration: underline; margin-top: 4px; display: inline-block; }
+  .finding-detail { display: none; margin-top: 4px; }
+  .finding-detail.open { display: block; }
+  .raw-toggle { font-size: 11px; color: #666; cursor: pointer; text-decoration: underline; margin: 10px 0 4px; display: inline-block; }
+  #detail-raw { display: none; white-space: pre-wrap; font-size: 11px; background: #f7f7f7; padding: 8px; border-radius: 3px; }
+  #detail-raw.open { display: block; }
 </style>
 </head>
 <body>
@@ -350,30 +387,169 @@ function renderHeat() {
   }
 }
 
+// --- Evidence report rendering ------------------------------------------
+// Built entirely with createElement/textContent, never innerHTML string
+// interpolation of dynamic data -- some of this text (owner names,
+// addresses) comes from an external data source, and the results list's
+// use of innerHTML with unescaped external fields is a known, separate
+// issue (flagged in the architecture audit) that this new code
+// deliberately does not repeat.
+
+function el(tag, opts) {
+  opts = opts || {};
+  const e = document.createElement(tag);
+  if (opts.className) e.className = opts.className;
+  if (opts.text !== undefined) e.textContent = opts.text;
+  return e;
+}
+
+const VERDICT_CLASS = {
+  'PROMISING SCREENING RESULT': 'promising',
+  'MIXED SIGNALS': 'mixed',
+  'SIGNIFICANT CONCERNS FOUND': 'concerns',
+  'INSUFFICIENT DATA TO SCREEN': 'insufficient',
+};
+
+function renderFindingCard(f) {
+  const card = el('div', {className: `finding-card status-${f.status}`});
+
+  const titleRow = el('div', {className: 'finding-title-row'});
+  titleRow.appendChild(el('span', {className: 'finding-category', text: f.category}));
+  const badges = el('span');
+  badges.appendChild(el('span', {className: `status-badge status-${f.status}`, text: f.status}));
+  badges.appendChild(document.createTextNode(' '));
+  badges.appendChild(el('span', {className: 'evidence-badge', text: f.evidence_level.replace('_', ' ')}));
+  titleRow.appendChild(badges);
+  card.appendChild(titleRow);
+
+  card.appendChild(el('div', {className: 'finding-row', text: f.explanation}));
+
+  const toggle = el('span', {className: 'finding-toggle', text: 'Show source, limitations & next step'});
+  const detail = el('div', {className: 'finding-detail'});
+
+  const sourceRow = el('div', {className: 'finding-row'});
+  sourceRow.appendChild(el('b', {text: 'Source: '}));
+  sourceRow.appendChild(document.createTextNode(f.source + (f.source_date ? ` (${f.source_date})` : '')));
+  detail.appendChild(sourceRow);
+
+  const estRow = el('div', {className: 'finding-row'});
+  estRow.appendChild(el('b', {text: 'Establishes: '}));
+  estRow.appendChild(document.createTextNode(f.establishes));
+  detail.appendChild(estRow);
+
+  const notEstRow = el('div', {className: 'finding-row'});
+  notEstRow.appendChild(el('b', {text: 'Does NOT establish: '}));
+  notEstRow.appendChild(document.createTextNode(f.does_not_establish));
+  detail.appendChild(notEstRow);
+
+  const limRow = el('div', {className: 'finding-row limitation'});
+  limRow.appendChild(el('b', {text: 'Limitation: '}));
+  limRow.appendChild(document.createTextNode(f.limitation));
+  detail.appendChild(limRow);
+
+  const nextRow = el('div', {className: 'finding-row next-step'});
+  nextRow.appendChild(el('b', {text: 'Verify next: '}));
+  nextRow.appendChild(document.createTextNode(f.next_step));
+  detail.appendChild(nextRow);
+
+  toggle.onclick = () => {
+    detail.classList.toggle('open');
+    toggle.textContent = detail.classList.contains('open') ? 'Hide details' : 'Show source, limitations & next step';
+  };
+
+  card.appendChild(toggle);
+  card.appendChild(detail);
+  return card;
+}
+
+function renderEvidenceReport(container, evidence) {
+  if (evidence.error) {
+    container.appendChild(el('div', {className: 'finding-row', text: 'Evidence report failed: ' + evidence.error}));
+    return;
+  }
+
+  const banner = el('div', {className: `verdict-banner ${VERDICT_CLASS[evidence.overall_verdict] || 'insufficient'}`});
+  banner.appendChild(el('div', {className: 'verdict-title', text: evidence.overall_verdict}));
+  banner.appendChild(el('div', {className: 'verdict-explain', text: evidence.overall_verdict_explanation}));
+  container.appendChild(banner);
+
+  if (evidence.what_could_kill_the_deal && evidence.what_could_kill_the_deal.length) {
+    container.appendChild(el('h3', {text: 'What could kill the deal'}));
+    const row = el('div', {className: 'bucket-row'});
+    evidence.what_could_kill_the_deal.forEach(cat => row.appendChild(el('span', {className: 'bucket-chip', text: cat})));
+    container.appendChild(row);
+  }
+
+  const bucketSpec = [
+    ['What we know', evidence.what_we_know],
+    ['What we think (indicated, not confirmed)', evidence.what_we_think],
+    ["What we don't know", evidence.what_we_dont_know],
+  ];
+  bucketSpec.forEach(([label, cats]) => {
+    if (!cats || !cats.length) return;
+    container.appendChild(el('h3', {text: label}));
+    const row = el('div', {className: 'bucket-row'});
+    cats.forEach(cat => row.appendChild(el('span', {className: 'bucket-chip', text: cat})));
+    container.appendChild(row);
+  });
+
+  if (evidence.what_to_verify_next && evidence.what_to_verify_next.length) {
+    container.appendChild(el('h3', {text: 'What to verify next'}));
+    const ul = el('ul');
+    ul.style.fontSize = '11px';
+    ul.style.paddingLeft = '18px';
+    evidence.what_to_verify_next.slice(0, 6).forEach(step => ul.appendChild(el('li', {text: step})));
+    container.appendChild(ul);
+  }
+
+  container.appendChild(el('h3', {text: 'Every finding, in detail'}));
+  (evidence.findings || []).forEach(f => container.appendChild(renderFindingCard(f)));
+}
+
 async function loadParcelDetail(apn) {
   const r = currentResults.find(x => x.apn === apn);
-  if (!r) { document.getElementById('detail').textContent = 'Parcel not found in current results.'; return; }
-  document.getElementById('detail').textContent = 'Loading...';
+  const detailEl = document.getElementById('detail');
+  if (!r) { detailEl.textContent = 'Parcel not found in current results.'; return; }
+  detailEl.textContent = 'Loading full evidence report...';
   const resp = await fetch(`/api/parcel/${encodeURIComponent(apn)}/report`, {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({raw: r.raw}),
   });
   const data = await resp.json();
-  if (data.error) { document.getElementById('detail').textContent = 'Error: ' + data.error; return; }
+  detailEl.innerHTML = '';
+  if (data.error) { detailEl.textContent = 'Error: ' + data.error; return; }
 
-  let out = `APN: ${data.apn}\n\n`;
-  out += `--- OWNER ---\n${JSON.stringify(data.current_owner, null, 2)}\n\n`;
-  out += `--- TAX ASSESSMENT ---\n${JSON.stringify(data.tax_assessment, null, 2)}\n\n`;
-  out += `--- TAX FLAGS ---\n${JSON.stringify(data.tax_flags, null, 2)}\n\n`;
-  out += `--- ZONING (only covers unincorporated Miami-Dade FL & King County WA) ---\n`;
-  out += (data.zoning && Object.keys(data.zoning).length) ? JSON.stringify(data.zoning, null, 2) : 'Not covered for this location.';
-  out += `\n\n`;
-  out += `--- BUILDABILITY CONCERNS ---\n`;
-  const concerns = (data.buildability && data.buildability.concerns) || [];
-  out += concerns.length ? concerns.map(c => '- ' + c).join('\n') : 'None flagged.';
-  out += `\n\n--- FULL BUILDABILITY REPORT ---\n${JSON.stringify(data.buildability, null, 2)}\n\n`;
-  out += `--- LISTING LINKS ---\n${JSON.stringify(data.listing_links, null, 2)}`;
-  document.getElementById('detail').textContent = out;
+  detailEl.appendChild(el('h3', {text: `APN: ${data.apn}`}));
+
+  const owner = data.current_owner || {};
+  if (owner.owner_name) {
+    const ownerRow = el('div', {className: 'finding-row'});
+    ownerRow.appendChild(el('b', {text: 'Current owner: '}));
+    ownerRow.appendChild(document.createTextNode(
+      `${owner.owner_name} (${owner.owner_type || 'unknown'}) -- owned ${owner.ownership_years ?? '?'} yrs, paid $${owner.price_paid ?? '?'}`
+    ));
+    detailEl.appendChild(ownerRow);
+  }
+  if (data.tax_flags && data.tax_flags.flagged) {
+    const flagRow = el('div', {className: 'finding-row limitation'});
+    flagRow.appendChild(el('b', {text: 'Tax/lien flag: '}));
+    flagRow.appendChild(document.createTextNode(
+      `${data.tax_flags.lien_count} lien(s), ${data.tax_flags.foreclosure_count} foreclosure record(s) on file.`
+    ));
+    detailEl.appendChild(flagRow);
+  }
+
+  renderEvidenceReport(detailEl, data.evidence || {});
+
+  const rawToggle = el('span', {className: 'raw-toggle', text: 'Show raw data (for developers)'});
+  const rawBox = el('pre', {className: '', text: JSON.stringify(data, null, 2)});
+  rawBox.id = 'detail-raw';
+  rawToggle.onclick = () => {
+    rawBox.classList.toggle('open');
+    rawToggle.textContent = rawBox.classList.contains('open') ? 'Hide raw data' : 'Show raw data (for developers)';
+  };
+  detailEl.appendChild(rawToggle);
+  detailEl.appendChild(rawBox);
 }
 
 document.getElementById('delinquency-place').addEventListener('change', function() {

@@ -206,12 +206,33 @@ def api_parcel_report(apn):
     except Exception as e:
         zoning = {"error": str(e)}
 
+    tax_flags = v.get_tax_flags(raw)
+    owner_mailing = v.get_owner_mailing_address(raw)
+
+    # The trust/evidence report is the PRIMARY thing the UI now renders --
+    # see the framework's own module-level docstring in vacant_land_search.py
+    # for why. It's built from whatever buildability/zoning data actually
+    # came back; a failed sub-call (network error, etc.) is treated as
+    # "no usable data for this category," which the framework already
+    # knows how to represent honestly, not as a reason to skip the whole
+    # report.
+    try:
+        evidence = v.build_evidence_report(
+            buildability if "error" not in buildability else {},
+            zoning if "error" not in zoning else {},
+            tax_flags,
+            owner_mailing,
+        )
+    except Exception as e:
+        evidence = {"error": str(e)}
+
     return jsonify({
         "apn": apn,
+        "evidence": evidence,
         "buildability": buildability,
         "tax_assessment": v.get_tax_assessment_info_realie(raw),
         "current_owner": v.get_current_owner_info(raw.get("salesHistory") or []),
-        "tax_flags": v.get_tax_flags(raw),
+        "tax_flags": tax_flags,
         "listing_links": listing_links,
         "zoning": zoning,
     })

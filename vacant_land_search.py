@@ -2877,6 +2877,638 @@ def skip_trace_owners_bulk(
     return results
 
 
+# ============================================================================
+# Trust & Evidence framework (2026-09-13)
+#
+# This is a SYNTHESIS LAYER, not a replacement. It consumes the existing
+# outputs of get_comprehensive_buildability_report(), check_zoning_district(),
+# get_tax_flags(), get_owner_mailing_address(), and search_vacant_land_realie()
+# raw records -- it makes ZERO new external calls of its own, and it changes
+# NOTHING about how those existing functions work. Every function that
+# existed before this section keeps its exact same signature and behavior.
+#
+# WHY THIS EXISTS: a user explicitly pointed out that a vacant-land investor
+# "cannot afford to be confidently wrong," and that every prior version of
+# this toolkit's output (raw dicts, a bare buildability percentage) let a
+# customer read more certainty into a number than the underlying data
+# actually supports. This section's whole job is to never let that happen:
+# every conclusion gets an explicit evidence level, an explicit statement of
+# what it does NOT establish, and a recommended verification step -- visible
+# to the customer, not just documented in code comments the way the rest of
+# this file's honest-limits discipline usually works.
+#
+# THE SIX EVIDENCE LEVELS (exactly as specified, not renamed or reduced):
+#   VERIFIED             -- confirmed by a source authoritative for this
+#                            EXACT fact, on the real parcel geometry. Given
+#                            this toolkit's current placeholder-boundary
+#                            limitation (see below), almost nothing in a
+#                            buildability report can honestly reach this
+#                            level yet -- that's a true statement about the
+#                            product today, not a bug in this framework.
+#   LIKELY               -- a real, authoritative source was checked, but
+#                            some gap remains (approximate geometry, a
+#                            screening-grade rather than confirmatory
+#                            methodology, a known dataset blind spot).
+#   INDICATED            -- a real signal exists, but it is a PROXY or
+#                            INFERENCE, not a direct measurement of the
+#                            actual fact in question (nearby buildings as a
+#                            utility signal is the canonical example).
+#   UNKNOWN              -- no data source was available or returned a
+#                            usable answer for this specific point. This is
+#                            NEVER allowed to be presented as "checked, no
+#                            issue" -- see _NO_DATA_SOURCE_FINDING below.
+#   CONFLICTING          -- two or more sources disagree (reserved for
+#                            future use -- this toolkit does not yet
+#                            cross-validate any fact against a second
+#                            source, so this level is defined but not
+#                            currently produced by anything below; wiring a
+#                            second source in for any category would be the
+#                            natural way to start actually using it).
+#   REQUIRES_VERIFICATION -- structurally cannot be answered by ANY data
+#                            source this toolkit has, free or paid (legal
+#                            easements, minimum lot size, setbacks,
+#                            subdivision restrictions). Distinct from
+#                            UNKNOWN: UNKNOWN means "we tried and got
+#                            nothing back," REQUIRES_VERIFICATION means
+#                            "this was never a question free public data
+#                            could answer in the first place."
+# ============================================================================
+
+EVIDENCE_VERIFIED = "VERIFIED"
+EVIDENCE_LIKELY = "LIKELY"
+EVIDENCE_INDICATED = "INDICATED"
+EVIDENCE_UNKNOWN = "UNKNOWN"
+EVIDENCE_CONFLICTING = "CONFLICTING"
+EVIDENCE_REQUIRES_VERIFICATION = "REQUIRES_VERIFICATION"
+
+# Status is a SEPARATE axis from evidence level -- evidence level says how
+# much to trust the finding; status says how the finding should make a
+# customer feel about the parcel. A CAUTION status can sit on top of LIKELY
+# evidence (real data, but the fact itself doesn't fully clear the parcel);
+# an UNKNOWN status always pairs with UNKNOWN or REQUIRES_VERIFICATION
+# evidence, never with VERIFIED/LIKELY/INDICATED.
+STATUS_CLEAR = "CLEAR"
+STATUS_CAUTION = "CAUTION"
+STATUS_CONCERN = "CONCERN"
+STATUS_UNKNOWN = "UNKNOWN"
+
+
+def make_finding(
+    category: str,
+    status: str,
+    evidence_level: str,
+    source: str,
+    establishes: str,
+    does_not_establish: str,
+    explanation: str,
+    limitation: str,
+    next_step: str,
+    source_date: str | None = None,
+) -> dict:
+    """
+    The one standardized shape every finding in this framework is built
+    from -- category, evidence_level, and status are always machine-
+    readable constants from the lists above; everything else is the plain-
+    English text a customer actually reads. `source_date` is the
+    underlying DATA's own vintage where one exists (a tax year, an
+    assessment date) -- NOT "when this API was called," which is always
+    "just now" and tells a customer nothing useful about data freshness.
+    """
+    return {
+        "category": category,
+        "status": status,
+        "evidence_level": evidence_level,
+        "source": source,
+        "source_date": source_date,
+        "establishes": establishes,
+        "does_not_establish": does_not_establish,
+        "explanation": explanation,
+        "limitation": limitation,
+        "next_step": next_step,
+    }
+
+
+def _no_data_finding(category: str, source_attempted: str, next_step: str) -> dict:
+    """
+    The mandatory shape for "we have nothing." Fixes the exact failure
+    mode named explicitly: "no data found" must never read as "doesn't
+    exist." Every no-data finding says, in the same words, that absence of
+    data is not absence of the underlying fact.
+    """
+    return make_finding(
+        category=category,
+        status=STATUS_UNKNOWN,
+        evidence_level=EVIDENCE_UNKNOWN,
+        source=source_attempted,
+        establishes="Nothing -- no usable data was returned.",
+        does_not_establish=(
+            "This does NOT mean the condition is absent. Absence of data is "
+            "not evidence of absence of the underlying fact."
+        ),
+        explanation=f"{source_attempted} did not return usable data for this location.",
+        limitation="No usable result from the data source attempted for this category.",
+        next_step=next_step,
+    )
+
+
+def _never_available_finding(category: str, why: str, next_step: str) -> dict:
+    """
+    For the categories that NO free or paid data source in this toolkit
+    can ever answer (legal easements, minimum lot size, setbacks,
+    subdivision restrictions). Always REQUIRES_VERIFICATION, always the
+    same honest framing, never silently omitted from a report.
+    """
+    return make_finding(
+        category=category,
+        status=STATUS_UNKNOWN,
+        evidence_level=EVIDENCE_REQUIRES_VERIFICATION,
+        source="No data source -- not attempted",
+        establishes="Nothing. This was never checked against any dataset.",
+        does_not_establish="Anything about whether this is or isn't a problem for this parcel.",
+        explanation=why,
+        limitation="This category cannot currently be answered by any free or paid source this toolkit uses.",
+        next_step=next_step,
+    )
+
+
+def build_evidence_report(buildability: dict, zoning: dict, tax_flags: dict, owner_mailing: dict) -> dict:
+    """
+    Takes the ALREADY-COMPUTED outputs of get_comprehensive_buildability_report(),
+    check_zoning_district(), get_tax_flags(), and get_owner_mailing_address()
+    and reinterprets them into the evidence/trust framework above. Makes no
+    new network calls -- pure synthesis of data this toolkit already fetched.
+
+    IMPORTANT, STANDING LIMITATION that shapes every finding below: every
+    buildability check that needs a parcel BOUNDARY (not just a point) is
+    currently run against a synthetic placeholder box centered on the
+    parcel's coordinate, not its real shape (see get_comprehensive_
+    buildability_report's docstring). That means NOTHING geometry-based
+    below can honestly claim VERIFIED status -- it is capped at LIKELY at
+    best, regardless of how authoritative the underlying government
+    dataset is, because the SHAPE being checked against that dataset is
+    not confirmed to be the real parcel. This cap is applied explicitly,
+    category by category, not left implicit.
+
+    Returns:
+        {
+            "findings": [ ... one dict per category, in a fixed order ... ],
+            "what_we_know": [ ... category names ... ],
+            "what_we_think": [ ... category names ... ],
+            "what_we_dont_know": [ ... category names ... ],
+            "what_could_kill_the_deal": [ ... category names ... ],
+            "what_to_verify_next": [ ... deduplicated next-step strings, concerns first ... ],
+            "scores": { ... see _build_scores ... },
+            "overall_verdict": "PROMISING SCREENING RESULT" | "MIXED SIGNALS" |
+                                "SIGNIFICANT CONCERNS FOUND" | "INSUFFICIENT DATA TO SCREEN",
+            "overall_verdict_explanation": "...",
+        }
+    """
+    findings: list[dict] = []
+
+    # --- Physical road access (is there a mapped road there at all) -------
+    road = buildability.get("road_access")
+    if road is None:
+        findings.append(_no_data_finding(
+            "Physical road access",
+            "Census TIGER/Line roads (via a government server that did not respond)",
+            "Check county GIS or drive the frontage in person.",
+        ))
+    else:
+        has_road = road.get("has_mapped_road_access")
+        roads = road.get("nearby_roads") or []
+        if has_road:
+            findings.append(make_finding(
+                category="Physical road access",
+                status=STATUS_CLEAR,
+                evidence_level=EVIDENCE_LIKELY,
+                source="U.S. Census Bureau TIGER/Line roads",
+                establishes=f"A mapped road ({', '.join(roads[:3])}) appears to touch or lie near the analyzed boundary.",
+                does_not_establish="Legal access, a recorded easement, or that the road is publicly maintained. See the separate Legal Road Access finding below.",
+                explanation="Census road data is self-reported by local governments and checked against an approximate placeholder boundary, not the parcel's confirmed real shape.",
+                limitation="TIGER data has known gaps: some real private/rural roads are missing, and a small number of trails are mis-tagged as roads.",
+                next_step="Confirm the physical road surface exists by viewing satellite imagery or visiting in person.",
+            ))
+        else:
+            findings.append(make_finding(
+                category="Physical road access",
+                status=STATUS_CONCERN,
+                evidence_level=EVIDENCE_INDICATED,
+                source="U.S. Census Bureau TIGER/Line roads",
+                establishes="No mapped road was found touching the analyzed boundary in this dataset.",
+                does_not_establish="That the parcel is definitely landlocked -- TIGER is known to omit real private and rural roads.",
+                explanation="Absence in this specific federal dataset is a real warning sign, not a confirmed conclusion, on a placeholder boundary.",
+                limitation="A parcel can have genuine physical road access that simply isn't in this dataset.",
+                next_step="Verify road access with satellite imagery, a plat map, or an in-person visit before treating this as disqualifying.",
+            ))
+
+    # --- Legal road access -- structurally never answerable here ----------
+    findings.append(_never_available_finding(
+        "Legal road access",
+        "A road touching a parcel on a map is not the same as a recorded legal right to use it. No free or paid source in this toolkit checks recorded easements, deeded rights-of-way, or county-maintained-road status.",
+        "Verify recorded access/easement and legal road-maintenance status with the county recorder or a title company before relying on this parcel having legal access.",
+    ))
+
+    # --- Parcel frontage ----------------------------------------------------
+    findings.append(_never_available_finding(
+        "Parcel frontage",
+        "No data source used by this toolkit reports measured road-frontage footage for a parcel.",
+        "Obtain a plat map or survey to confirm actual frontage footage.",
+    ))
+
+    # --- Easements ------------------------------------------------------
+    findings.append(_never_available_finding(
+        "Easements",
+        "Recorded easements (utility, access, drainage, or otherwise) are not published in any free nationwide dataset and are not checked by this toolkit.",
+        "A title search is the only reliable way to identify recorded easements.",
+    ))
+
+    # --- Utilities (electric / water / sewer) -- the canonical proxy -------
+    nearby = buildability.get("nearby_development")
+    if nearby is None:
+        findings.append(_no_data_finding(
+            "Utilities (electric/water/sewer)",
+            "OpenStreetMap Overpass (server did not respond)",
+            "Contact the local utility companies directly.",
+        ))
+    else:
+        count = nearby.get("nearby_building_count")
+        findings.append(make_finding(
+            category="Utilities (electric/water/sewer)",
+            status=STATUS_CAUTION,
+            evidence_level=EVIDENCE_INDICATED,
+            source="OpenStreetMap building density (proxy)",
+            establishes=f"{count} buildings were found nearby, used only as a rough proxy for whether utility infrastructure likely exists in the area.",
+            does_not_establish=(
+                "Whether electric, water, or sewer service is actually available AT THIS PARCEL. "
+                "Nearby buildings do not confirm a hookup exists, that the parcel is on the same "
+                "grid, or what it would cost to connect. No dataset, free or paid, answers this "
+                "question directly anywhere in the United States."
+            ),
+            explanation="This is a screening signal only, not a utility-company confirmation.",
+            limitation="A high nearby-building count is a reasonable 'probably' at best; a low count is a real warning sign but not proof of no service.",
+            next_step="Call the specific local electric, water, and sewer/septic authorities to confirm hookup availability and cost before relying on this.",
+        ))
+
+    # --- Septic suitability -------------------------------------------------
+    septic = buildability.get("septic_suitability")
+    if not septic:
+        findings.append(_no_data_finding(
+            "Septic / sanitation",
+            "USDA Soil Data Access",
+            "Commission a percolation test.",
+        ))
+    else:
+        rating = septic.get("rating")
+        status_map = {
+            "Not limited": STATUS_CLEAR, "Somewhat limited": STATUS_CAUTION,
+            "Very limited": STATUS_CONCERN, "Not rated": STATUS_UNKNOWN,
+        }
+        status = status_map.get(rating, STATUS_UNKNOWN)
+        evidence = EVIDENCE_UNKNOWN if rating == "Not rated" else EVIDENCE_LIKELY
+        findings.append(make_finding(
+            category="Septic / sanitation",
+            status=status,
+            evidence_level=evidence,
+            source="USDA Soil Data Access (SSURGO soil survey)",
+            establishes=f"The dominant soil type at this point is rated '{rating}' for septic absorption fields.",
+            does_not_establish=(
+                "Whether a septic permit would actually be approved. This is a soil-type "
+                "screening rating, not a real percolation test, and does not account for lot "
+                "slope, water table depth, or lot size requirements. 'Not limited' does not mean "
+                "automatically approved, and 'Very limited' does not mean automatically impossible."
+            ),
+            explanation=f"Soil type: {septic.get('soil_name', 'unknown')}, covering {septic.get('coverage_pct', '?')}% of the sampled point.",
+            limitation="A single dominant soil type at one point, not a site-specific test.",
+            next_step="Commission a real percolation/soil test from a licensed professional before assuming septic feasibility either way.",
+        ))
+
+    # --- Wetlands + Flood/floodway -------------------------------------
+    flood_wetland = buildability.get("flood_and_wetland")
+    if flood_wetland is None:
+        findings.append(_no_data_finding("Wetlands", "USFWS National Wetlands Inventory", "Order a formal wetland delineation."))
+        findings.append(_no_data_finding("Flood / floodway", "FEMA National Flood Hazard Layer", "Order a FEMA elevation certificate or flood determination."))
+    else:
+        excluded_acres = flood_wetland.get("flood_or_wetland_area_acres", 0)
+        total_acres = flood_wetland.get("total_area_acres", 0)
+        pct_clear = flood_wetland.get("buildability_score", 100)
+        # HONEST LIMIT surfaced directly: flood and wetland are checked as
+        # ONE combined excluded area by the underlying calculation, not
+        # separately. This framework does not currently split them back
+        # apart -- disclosed here rather than implied as two independent
+        # confirmations.
+        combined_note = (
+            "This toolkit currently checks flood zones and wetlands together as one combined "
+            "excluded area and cannot yet separately confirm which portion, if any, is wetland "
+            "versus flood zone."
+        )
+        if excluded_acres > 0:
+            findings.append(make_finding(
+                category="Wetlands",
+                status=STATUS_CAUTION,
+                evidence_level=EVIDENCE_LIKELY,
+                source="USFWS National Wetlands Inventory + FEMA NFHL (combined)",
+                establishes=f"Some portion of the analyzed boundary ({excluded_acres:.2f} of {total_acres:.2f} acres) overlaps a mapped flood zone or wetland.",
+                does_not_establish="A confirmed on-site wetland delineation, or which portion specifically is wetland versus flood zone.",
+                explanation=combined_note,
+                limitation="Checked against a placeholder boundary, not the parcel's confirmed real shape; national wetland maps can lag a real site visit.",
+                next_step="Order a formal wetland delineation and a FEMA elevation certificate before relying on this.",
+            ))
+            findings.append(make_finding(
+                category="Flood / floodway",
+                status=STATUS_CONCERN,
+                evidence_level=EVIDENCE_LIKELY,
+                source="FEMA National Flood Hazard Layer (SFHA only)",
+                establishes=f"Mapped flood/wetland overlap detected on the analyzed boundary.",
+                does_not_establish="The specific flood zone subtype (AE, VE, etc.), floodway status, or current insurance requirements -- those carry very different implications and are not distinguished here.",
+                explanation=combined_note,
+                limitation="Checked against a placeholder boundary, not the parcel's confirmed real shape; FEMA maps can be years out of date in some counties.",
+                next_step="Obtain the parcel's exact FEMA flood zone designation and, if in a mapped zone, an elevation certificate.",
+            ))
+        else:
+            findings.append(make_finding(
+                category="Wetlands",
+                status=STATUS_CLEAR,
+                evidence_level=EVIDENCE_LIKELY,
+                source="USFWS National Wetlands Inventory",
+                establishes="No wetlands were found overlapping the analyzed boundary in this federal dataset.",
+                does_not_establish="That wetlands are definitively absent. This is one federal map, not an on-site delineation, and the boundary checked is an approximation of the real parcel.",
+                explanation="Absence in this specific dataset is a positive signal, not a guarantee.",
+                limitation="National wetland inventories can be out of date relative to real on-the-ground conditions.",
+                next_step="A formal wetland delineation is the only way to be certain, and is advisable before any development-dependent purchase.",
+            ))
+            findings.append(make_finding(
+                category="Flood / floodway",
+                status=STATUS_CLEAR,
+                evidence_level=EVIDENCE_LIKELY,
+                source="FEMA National Flood Hazard Layer (SFHA only)",
+                establishes=f"No mapped Special Flood Hazard Area overlap was found ({pct_clear:.1f}% of the analyzed boundary clear).",
+                does_not_establish="Zero flood risk, floodway status, or that FEMA's map is current for this specific parcel.",
+                explanation="FEMA maps are periodically updated and can be outdated in some counties relative to real conditions on the ground.",
+                limitation="Checked against a placeholder boundary, not the parcel's confirmed real shape.",
+                next_step="Confirm the parcel's official FEMA flood zone designation directly before relying on this for a purchase decision.",
+            ))
+
+    # --- Slope / terrain --------------------------------------------------
+    slope = buildability.get("slope")
+    if not slope:
+        findings.append(_no_data_finding("Slope / terrain", "USGS elevation service", "Walk the site or commission a topographic survey."))
+    else:
+        steep = slope.get("steep")
+        findings.append(make_finding(
+            category="Slope / terrain",
+            status=STATUS_CONCERN if steep else STATUS_CLEAR,
+            evidence_level=EVIDENCE_LIKELY,
+            source="USGS elevation service (5-point sample)",
+            establishes=f"Approximately {slope.get('approx_slope_percent')}% slope estimated from a 5-point elevation sample.",
+            does_not_establish="A survey-grade slope measurement, or that the terrain is uniform across the whole parcel -- a steep section between sample points would not be caught.",
+            explanation="A rough estimate from 5 points ~30 meters apart, not a topographic survey.",
+            limitation="Localized steep areas between the 5 sample points would not be detected.",
+            next_step="Walk the site or commission a topographic survey before assuming grading costs.",
+        ))
+
+    # --- Zoning -----------------------------------------------------------
+    if not zoning:
+        findings.append(make_finding(
+            category="Zoning",
+            status=STATUS_UNKNOWN,
+            evidence_level=EVIDENCE_REQUIRES_VERIFICATION,
+            source="County zoning GIS (only 2 counties nationwide currently covered by this toolkit)",
+            establishes="Nothing -- this parcel is outside the 2 counties this toolkit currently has zoning data for.",
+            does_not_establish=(
+                "That zoning is favorable, unrestricted, or even residential. An unchecked "
+                "zoning finding is NOT the same as a clean zoning result -- it means zoning was "
+                "never checked at all for this location."
+            ),
+            explanation="Free, structured, nationwide zoning data does not exist; only 2 counties are covered today.",
+            limitation="No zoning information is available for the vast majority of U.S. parcels in this toolkit today.",
+            next_step="Contact the county planning/zoning department directly to confirm the zoning district and permitted uses.",
+        ))
+    else:
+        findings.append(make_finding(
+            category="Zoning",
+            status=STATUS_CAUTION,
+            evidence_level=EVIDENCE_INDICATED,
+            source=zoning.get("source", "County zoning GIS"),
+            establishes=f"Zoning district code: {zoning.get('zoning_code', 'unknown')}.",
+            does_not_establish="The actual permitted uses, minimum lot size, setbacks, height limits, or FAR for that zoning code -- only the district name/code itself is known.",
+            explanation="District code only; the underlying zoning ordinance text (what that code actually allows) is not looked up.",
+            limitation="A code like this means little without looking up what it actually permits in the local zoning ordinance.",
+            next_step="Look up the actual zoning ordinance for this code with the county, including permitted uses, setbacks, and any overlay restrictions.",
+        ))
+
+    # --- Minimum lot size / setbacks / frontage requirements ---------------
+    findings.append(_never_available_finding(
+        "Minimum lot size, setbacks & frontage requirements",
+        "These numeric zoning requirements are not published in any free nationwide dataset and are not checked even in the 2 counties this toolkit has base zoning coverage for.",
+        "Obtain these figures directly from the county zoning ordinance or a paid zoning-data provider before assuming a structure of any particular size is permitted.",
+    ))
+
+    # --- Parcel dimensions --------------------------------------------------
+    findings.append(make_finding(
+        category="Parcel dimensions",
+        status=STATUS_UNKNOWN,
+        evidence_level=EVIDENCE_REQUIRES_VERIFICATION,
+        source="Not available -- only a placeholder boundary exists internally",
+        establishes="Nothing about the parcel's real shape or exact boundary lines.",
+        does_not_establish="Anything -- the acreage figure shown elsewhere in this report comes from the county assessor and is separate from, and more reliable than, this boundary question.",
+        explanation="This toolkit does not currently have access to the parcel's real recorded boundary, only its approximate center point.",
+        limitation="All geometry-based findings in this report (flood, wetland, road access, environmental designations) are checked against a synthetic placeholder shape, not the real parcel.",
+        next_step="Obtain a plat map or survey for the parcel's real boundary before relying on any shape-based finding above.",
+    ))
+
+    # --- Subdivision restrictions -------------------------------------------
+    findings.append(_never_available_finding(
+        "Subdivision restrictions",
+        "Deed restrictions, HOA covenants, and subdivision plat restrictions are not published in any free nationwide dataset.",
+        "A title search will reveal recorded subdivision restrictions, if any.",
+    ))
+
+    # --- Environmental restrictions / protected areas -----------------------
+    env = buildability.get("environmental_designations")
+    if env is None:
+        findings.append(_no_data_finding("Environmental restrictions / protected areas", "USFWS Coastal Barrier Resources System + Critical Habitat", "Consult a wetlands/environmental attorney or consultant."))
+    else:
+        in_cbrs = env.get("in_coastal_barrier_resources_system")
+        in_habitat = env.get("in_critical_habitat")
+        if in_cbrs or in_habitat:
+            parts = []
+            if in_cbrs:
+                parts.append("within a Coastal Barrier Resources System zone (no federal flood insurance or infrastructure funding available there)")
+            if in_habitat:
+                species = ", ".join(env.get("critical_habitat_species") or [])
+                parts.append(f"overlapping designated critical habitat for: {species}")
+            findings.append(make_finding(
+                category="Environmental restrictions / protected areas",
+                status=STATUS_CONCERN,
+                evidence_level=EVIDENCE_LIKELY,
+                source="USFWS Coastal Barrier Resources System + Critical Habitat (federal only)",
+                establishes="This parcel is " + " and ".join(parts) + ".",
+                does_not_establish="Any state or local environmental designations, which are not checked at all.",
+                explanation="Federal designations only. These can restrict or add significant cost to development.",
+                limitation="Checked against a placeholder boundary, and federal-only -- state/local protected-area rules are not covered.",
+                next_step="Consult an environmental attorney or consultant before proceeding.",
+            ))
+        else:
+            findings.append(make_finding(
+                category="Environmental restrictions / protected areas",
+                status=STATUS_CLEAR,
+                evidence_level=EVIDENCE_LIKELY,
+                source="USFWS Coastal Barrier Resources System + Critical Habitat (federal only)",
+                establishes="No federal coastal-barrier or critical-habitat designation was found overlapping the analyzed boundary.",
+                does_not_establish="That the parcel is free of ALL environmental restrictions -- only these 2 specific federal designations were checked; state and local designations are not covered at all.",
+                explanation="A clean result on 2 specific federal datasets, not a comprehensive environmental clearance.",
+                limitation="State and local environmental designations are not checked by this toolkit.",
+                next_step="Check with the state environmental agency for any state-level protected-area designations.",
+            ))
+
+    # --- Nearby development / surrounding houses (context, not risk) -------
+    if nearby is not None:
+        findings.append(make_finding(
+            category="Nearby development / surrounding houses",
+            status=STATUS_CAUTION,
+            evidence_level=EVIDENCE_LIKELY,
+            source="OpenStreetMap",
+            establishes=f"{nearby.get('nearby_building_count')} mapped buildings within 400 meters.",
+            does_not_establish="Property condition, occupancy, or values of those buildings -- building count only.",
+            explanation="OpenStreetMap completeness varies significantly by area; some regions are mapped in detail, others sparsely.",
+            limitation="A building-count proxy, not a verified neighborhood survey.",
+            next_step="Review satellite imagery or visit the area to see actual surrounding development.",
+        ))
+
+    # --- Buildable area / development potential (the redesigned metric) ----
+    if flood_wetland is not None:
+        findings.append(make_finding(
+            category="Physical usable area (screening only)",
+            status=STATUS_CLEAR if pct_clear >= 90 else (STATUS_CAUTION if pct_clear >= 50 else STATUS_CONCERN),
+            evidence_level=EVIDENCE_LIKELY,
+            source="Derived: FEMA + USFWS overlap on the analyzed boundary",
+            establishes=f"Approximately {pct_clear:.1f}% of the analyzed boundary does not overlap a mapped flood zone or wetland.",
+            does_not_establish=(
+                "That this percentage of the parcel is LEGALLY DEVELOPABLE. This is a physical "
+                "screening measure of one specific factor (flood/wetland overlap) against an "
+                "approximate boundary -- it does not account for zoning, setbacks, minimum lot "
+                "size, legal access, septic feasibility, or any other requirement above. A "
+                "high percentage here is not permission to build; a low percentage does not by "
+                "itself mean unbuildable."
+            ),
+            explanation="Deliberately renamed and reframed from an earlier 'buildability score' -- that name implied more than this measurement actually establishes.",
+            limitation="Measured against a placeholder boundary, one factor among many required for actual development.",
+            next_step="Treat this as one input among many, not a standalone buildability answer -- confirm the boundary, zoning, access, and utilities separately.",
+        ))
+
+    return _finalize_evidence_report(findings, tax_flags, owner_mailing)
+
+
+def _finalize_evidence_report(findings: list[dict], tax_flags: dict, owner_mailing: dict) -> dict:
+    """Buckets findings into the 5 customer-facing groups the user
+    explicitly asked for, computes the category scores, and derives the
+    overall verdict from explicit, inspectable rules -- never a single
+    blended percentage that would hide how much is actually unknown."""
+
+    what_we_know = [f["category"] for f in findings if f["evidence_level"] in (EVIDENCE_VERIFIED, EVIDENCE_LIKELY)]
+    what_we_think = [f["category"] for f in findings if f["evidence_level"] == EVIDENCE_INDICATED]
+    what_we_dont_know = [f["category"] for f in findings if f["evidence_level"] in (EVIDENCE_UNKNOWN, EVIDENCE_REQUIRES_VERIFICATION, EVIDENCE_CONFLICTING)]
+    what_could_kill_the_deal = [f["category"] for f in findings if f["status"] == STATUS_CONCERN]
+
+    if tax_flags and tax_flags.get("flagged"):
+        what_could_kill_the_deal.append("Tax/lien flags on file (see owner & tax section)")
+
+    # Deduplicated verification steps, concerns first, then everything else.
+    seen = set()
+    what_to_verify_next = []
+    for f in sorted(findings, key=lambda f: 0 if f["status"] == STATUS_CONCERN else 1):
+        if f["next_step"] not in seen:
+            seen.add(f["next_step"])
+            what_to_verify_next.append(f["next_step"])
+
+    scores = _build_scores(findings)
+
+    # Overall verdict: computed ONLY from categories this toolkit can
+    # actually screen. Two kinds of category are excluded, for different
+    # reasons:
+    #   1. Always-REQUIRES_VERIFICATION categories (easements, setbacks,
+    #      subdivision restrictions) -- unknown by design in EVERY report,
+    #      so including them would make every parcel look identically
+    #      "insufficient data" regardless of how it screens on what this
+    #      toolkit CAN check.
+    #   2. Permanently proxy-only categories (utilities, nearby
+    #      development) -- these can never rise above an indirect signal
+    #      no matter how good the actual result is (a real utility hookup
+    #      is never confirmed by counting nearby buildings), so scoring
+    #      them like a normal risk category would make "PROMISING" an
+    #      unreachable verdict for every single parcel, which is its own
+    #      kind of dishonesty (a tier nothing can ever earn is as
+    #      misleading as a tier everything earns too easily).
+    _PERMANENTLY_INDICATIVE_CATEGORIES = {
+        "Utilities (electric/water/sewer)",
+        "Nearby development / surrounding houses",
+    }
+    screenable = [
+        f for f in findings
+        if f["evidence_level"] != EVIDENCE_REQUIRES_VERIFICATION
+        and f["category"] not in _PERMANENTLY_INDICATIVE_CATEGORIES
+    ]
+    concern_count = sum(1 for f in screenable if f["status"] == STATUS_CONCERN)
+    unknown_count = sum(1 for f in screenable if f["status"] == STATUS_UNKNOWN)
+    caution_count = sum(1 for f in screenable if f["status"] == STATUS_CAUTION)
+
+    if not screenable or unknown_count > len(screenable) / 2:
+        overall_verdict = "INSUFFICIENT DATA TO SCREEN"
+        overall_explanation = "Too many of the checkable categories returned no usable data to form a meaningful screening verdict."
+    elif concern_count > 0:
+        overall_verdict = "SIGNIFICANT CONCERNS FOUND"
+        overall_explanation = f"{concern_count} categor{'y' if concern_count == 1 else 'ies'} came back as a real concern. Review those before anything else."
+    elif caution_count > 0:
+        overall_verdict = "MIXED SIGNALS"
+        overall_explanation = "No outright red flags, but multiple categories carry real caveats worth resolving before an offer."
+    else:
+        overall_verdict = "PROMISING SCREENING RESULT"
+        overall_explanation = "The categories this toolkit can check came back clean. This is a SCREENING result, not a clearance -- the items in 'what we don't know' still need direct verification."
+
+    return {
+        "findings": findings,
+        "what_we_know": what_we_know,
+        "what_we_think": what_we_think,
+        "what_we_dont_know": what_we_dont_know,
+        "what_could_kill_the_deal": what_could_kill_the_deal,
+        "what_to_verify_next": what_to_verify_next,
+        "scores": scores,
+        "overall_verdict": overall_verdict,
+        "overall_verdict_explanation": overall_explanation,
+    }
+
+
+def _build_scores(findings: list[dict]) -> dict:
+    """
+    Only the scores that can actually be defended from the data on hand.
+    Each is a category-level status derived from its own findings, not a
+    single blended number pretending to summarize everything at once.
+    """
+    by_category = {f["category"]: f for f in findings}
+
+    def status_of(*categories):
+        statuses = [by_category[c]["status"] for c in categories if c in by_category]
+        if not statuses:
+            return STATUS_UNKNOWN
+        if STATUS_CONCERN in statuses:
+            return STATUS_CONCERN
+        if STATUS_CAUTION in statuses:
+            return STATUS_CAUTION
+        if STATUS_UNKNOWN in statuses:
+            return STATUS_UNKNOWN
+        return STATUS_CLEAR
+
+    physical = by_category.get("Physical usable area (screening only)")
+    return {
+        "physical_usable_area_pct": physical["establishes"] if physical else None,
+        "access_score": status_of("Physical road access", "Legal road access", "Parcel frontage", "Easements"),
+        "utility_score": status_of("Utilities (electric/water/sewer)"),
+        "septic_sanitation_risk": status_of("Septic / sanitation"),
+        "environmental_risk": status_of("Wetlands", "Flood / floodway", "Environmental restrictions / protected areas"),
+        "zoning_risk": status_of("Zoning", "Minimum lot size, setbacks & frontage requirements"),
+    }
+
+
 # --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------

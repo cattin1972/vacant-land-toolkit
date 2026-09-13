@@ -1,0 +1,571 @@
+<!doctype html>
+<title>Vacant Land Toolkit Red Team</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --paper:#EFF1EC; --paper-raised:#E4E7E0; --ink:#1A2420; --ink-dim:#4B564F;
+    --line:#C9CFC4; --accent:#2B6E63; --accent-soft:#DCE7E2; --structural:#8B5A2B;
+    --critical:#B23A2E; --critical-soft:#F3DEDA; --warning:#C68A1F; --warning-soft:#F3E7D0;
+    --good:#3E7D5C; --good-soft:#DCEBE1;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#14181A; --paper-raised:#1D2325; --ink:#E4E8E3; --ink-dim:#9CA8A0;
+      --line:#33403A; --accent:#5FB3A3; --accent-soft:#1E2E2A; --structural:#C89354;
+      --critical:#E27668; --critical-soft:#3A2320; --warning:#E0B054; --warning-soft:#332711;
+      --good:#7FC79E; --good-soft:#1B2E22;
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#14181A; --paper-raised:#1D2325; --ink:#E4E8E3; --ink-dim:#9CA8A0;
+    --line:#33403A; --accent:#5FB3A3; --accent-soft:#1E2E2A; --structural:#C89354;
+    --critical:#E27668; --critical-soft:#3A2320; --warning:#E0B054; --warning-soft:#332711;
+    --good:#7FC79E; --good-soft:#1B2E22;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0; background:var(--paper); color:var(--ink); font-family:"Source Serif 4",Georgia,serif; line-height:1.6; padding-inline:20px; padding-block:0 64px;}
+  h1,h2,h3{font-family:"Fraunces",Georgia,serif; text-wrap:balance; font-weight:600;}
+  .mono{font-family:"IBM Plex Mono",ui-monospace,monospace;}
+  .wrap{max-width:760px; margin-inline:auto;}
+  .masthead{padding-block:36px 20px; border-bottom:2px solid var(--ink);}
+  .eyebrow{font-family:"IBM Plex Mono"; font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-dim);}
+  .masthead h1{font-size:clamp(26px,7vw,40px); margin:8px 0 6px; font-weight:700;}
+  .masthead p{color:var(--ink-dim); margin:0; max-width:62ch;}
+  .callout{background:var(--critical-soft); border:1px solid var(--critical); border-radius:4px; padding:16px 18px; font-size:14.5px; margin:20px 0;}
+  .callout b{color:var(--critical);}
+  section{margin-top:44px;}
+  section > h2{font-size:20px; border-bottom:1px solid var(--line); padding-bottom:8px; margin-bottom:6px;}
+  .cat-num{font-family:"IBM Plex Mono"; color:var(--structural); font-weight:600;}
+  .section-lede{color:var(--ink-dim); margin:0 0 16px; font-size:13.5px;}
+  .chip{display:inline-flex; align-items:center; font-family:"IBM Plex Mono"; font-size:10px; letter-spacing:.03em; text-transform:uppercase; padding:2px 7px; border-radius:3px; font-weight:500; white-space:nowrap;}
+  .chip.critical{background:var(--critical-soft); color:var(--critical);}
+  .chip.warning{background:var(--warning-soft); color:var(--warning);}
+  .chip.good{background:var(--good-soft); color:var(--good);}
+  .objection{border-left:3px solid var(--line); padding:4px 0 14px 16px; margin-bottom:16px;}
+  .objection.sev-critical{border-left-color:var(--critical);}
+  .objection.sev-high{border-left-color:var(--warning);}
+  .objection.sev-moderate{border-left-color:var(--good);}
+  .objection .quote{font-style:italic; font-size:15px; margin:2px 0 4px;}
+  .objection .why{font-size:13.5px; color:var(--ink-dim); margin:0 0 6px;}
+  .objection .stat-line{font-family:"IBM Plex Mono"; font-size:11px; color:var(--ink-dim); line-height:1.7;}
+  .objection .stat-line b{color:var(--ink); font-weight:600;}
+  .obj-head{display:flex; gap:8px; align-items:baseline; margin-bottom:2px; flex-wrap:wrap;}
+  .obj-num{font-family:"IBM Plex Mono"; font-weight:600; color:var(--structural); font-size:13px;}
+  .top10{border:1px solid var(--line); background:var(--paper-raised); border-radius:4px; padding:16px 18px; margin-bottom:16px;}
+  .top10 h3{margin:0 0 10px; font-size:17px;}
+  .top10 ol{margin:0; padding-left:20px; font-size:14px;}
+  .top10 li{margin-bottom:6px;}
+  footer{margin-top:56px; padding-top:20px; border-top:1px solid var(--line); font-size:12.5px; color:var(--ink-dim); font-family:"IBM Plex Mono";}
+</style>
+
+<div class="wrap">
+  <div class="masthead">
+    <div class="eyebrow">Adversarial Product Review — Analysis Only, No Code Written</div>
+    <h1>Why a Wholesaler Wouldn't Buy This</h1>
+    <p>Written from the seat of a sophisticated vacant‑land wholesaler already running PropStream, BatchLeads, or similar — someone whose default posture toward a new tool is skepticism, not curiosity. 62 objections across all 25 categories you asked for, each rated honestly, including the ones that sting.</p>
+  </div>
+
+  <div class="callout">
+    <b>The uncomfortable summary:</b> almost none of these 62 objections are about missing data sources. Most are about three things — the product doesn't tell the customer what to <i>do</i> with the data, it asks them to juggle three separate paid accounts to get a complete workflow, and it currently looks like an internal tool, not something you'd trust with a five‑figure decision. Fix those three, and roughly half this list stops mattering.
+  </div>
+
+  <section id="c1">
+    <h2><span class="cat-num">01</span> · Accuracy</h2>
+    <div class="objection sev-critical">
+      <div class="obj-head"><span class="obj-num">1</span><span class="chip critical">Critical</span></div>
+      <p class="quote">"Your buildability score says 98% buildable, but it's calculated on a placeholder box, not my actual parcel. How do I know it's not just wrong?"</p>
+      <p class="why">This is the single most dangerous objection in the whole list — it questions the core output, not a side feature.</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> better logic (real parcel geometry) + disclosure now · <b>Moat if fixed:</b> High</p>
+    </div>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">2</span><span class="chip warning">High</span></div>
+      <p class="quote">"I've seen FEMA's national flood layer disagree with the local floodplain map before. Which one am I supposed to trust?"</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> disclosure now, more data long‑term · <b>Moat if fixed:</b> Medium</p>
+    </div>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">3</span><span class="chip warning">High</span></div>
+      <p class="quote">"Septic suitability from soil type alone doesn't tell me slope or depth to water table — a real perc test can come back totally different."</p>
+      <p class="stat-line"><b>Solved today:</b> Partial · <b>Needs:</b> more data + disclosure now · <b>Moat if fixed:</b> Medium</p>
+    </div>
+    <div class="objection sev-moderate">
+      <div class="obj-head"><span class="obj-num">4</span><span class="chip good">Moderate</span></div>
+      <p class="quote">"Your wildfire risk tiers are your own guess, not an official USFS breakpoint. How do I know 'Moderate' isn't really 'High'?"</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> disclosure now (already true in code, not shown to customer) · <b>Moat if fixed:</b> Low</p>
+    </div>
+  </section>
+
+  <section id="c2">
+    <h2><span class="cat-num">02</span> · Data coverage</h2>
+    <div class="objection sev-critical">
+      <div class="obj-head"><span class="obj-num">5</span><span class="chip critical">Critical</span></div>
+      <p class="quote">"Zoning only works in two counties? I work in 40 states. That's not a feature, that's a demo."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> more data (paid source likely required) + disclosure now · <b>Moat if fixed:</b> High</p>
+    </div>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">6</span><span class="chip warning">High</span></div>
+      <p class="quote">"Tax delinquency only covers 8 places nationwide. My whole model is chasing distressed sellers, and none of my target counties are on your list."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> more data + disclosure now · <b>Moat if fixed:</b> Medium</p>
+    </div>
+    <div class="objection sev-moderate">
+      <div class="obj-head"><span class="obj-num">7</span><span class="chip good">Moderate</span></div>
+      <p class="quote">"No permit or new‑construction data. I use that to tell if an area is actually developing before I buy in."</p>
+      <p class="stat-line"><b>Solved today:</b> No (documented as non‑functional) · <b>Needs:</b> more data · <b>Moat if fixed:</b> Medium</p>
+    </div>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">8</span><span class="chip warning">High</span></div>
+      <p class="quote">"No comps at all. I can't tell if the price I'm about to offer is even in the right neighborhood."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> more data + better logic · <b>Moat if fixed:</b> High</p>
+    </div>
+  </section>
+
+  <section id="c3">
+    <h2><span class="cat-num">03</span> · Data freshness</h2>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">9</span><span class="chip warning">High</span></div>
+      <p class="quote">"There's no timestamp anywhere. How current is any of this?"</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> better UX (surface data already has dates internally) · <b>Moat if fixed:</b> Medium</p>
+    </div>
+    <div class="objection sev-moderate">
+      <div class="obj-head"><span class="obj-num">10</span><span class="chip good">Moderate</span></div>
+      <p class="quote">"County records can lag 6–12 months. Am I chasing a dead deal without knowing it?"</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> disclosure now · <b>Moat if fixed:</b> Low</p>
+    </div>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">11</span><span class="chip warning">High</span></div>
+      <p class="quote">"If the owner already sold this to an heir last week, would I even know, or would I waste time chasing a ghost?"</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> more data + disclosure now · <b>Moat if fixed:</b> Medium</p>
+    </div>
+  </section>
+
+  <section id="c4">
+    <h2><span class="cat-num">04</span> · Trust</h2>
+    <div class="objection sev-critical">
+      <div class="obj-head"><span class="obj-num">12</span><span class="chip critical">Critical</span></div>
+      <p class="quote">"I've never heard of Realie or Tracerfy. PropStream and BatchLeads have been around for years — why would I trust two unknown vendors stacked together?"</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> better UX (brand it as one product, not exposed vendor plumbing) · <b>Moat if fixed:</b> Medium</p>
+    </div>
+    <div class="objection sev-critical">
+      <div class="obj-head"><span class="obj-num">13</span><span class="chip critical">Critical</span></div>
+      <p class="quote">"You want me to bring my own API keys to two other companies. That's two more accounts, two more bills, two more things that can break."</p>
+      <p class="stat-line"><b>Solved today:</b> No (this is a deliberate design choice for cost/liability reasons) · <b>Needs:</b> better UX at minimum, possibly a bundled tier long‑term · <b>Moat if fixed:</b> Medium</p>
+    </div>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">14</span><span class="chip warning">High</span></div>
+      <p class="quote">"No case studies, no testimonials, nothing showing this works for anyone but you."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> nothing technical — this is a go‑to‑market gap · <b>Moat if fixed:</b> Low</p>
+    </div>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">15</span><span class="chip warning">High</span></div>
+      <p class="quote">"There's no confidence score anywhere. You're just handing me numbers and expecting me to trust them blind."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> better logic + better UX · <b>Moat if fixed:</b> High</p>
+    </div>
+  </section>
+
+  <section id="c5">
+    <h2><span class="cat-num">05</span> · Buildability</h2>
+    <div class="objection sev-critical">
+      <div class="obj-head"><span class="obj-num">16</span><span class="chip critical">Critical</span></div>
+      <p class="quote">"Same placeholder‑box problem again — if buildability isn't run on my actual parcel shape, why would I make a five‑figure decision off it?"</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> better logic + disclosure now · <b>Moat if fixed:</b> High</p>
+    </div>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">17</span><span class="chip warning">High</span></div>
+      <p class="quote">"No setback, FAR, or lot‑coverage numbers — I still don't know how big a structure I could actually put here."</p>
+      <p class="stat-line"><b>Solved today:</b> No (no free source exists) · <b>Needs:</b> more data (likely paid) · <b>Moat if fixed:</b> High</p>
+    </div>
+    <div class="objection sev-moderate">
+      <div class="obj-head"><span class="obj-num">18</span><span class="chip good">Moderate</span></div>
+      <p class="quote">"Slope is sampled at 5 points, 30 meters apart. A cliff in the middle of the lot could hide between your sample points."</p>
+      <p class="stat-line"><b>Solved today:</b> Partial · <b>Needs:</b> better logic + disclosure now · <b>Moat if fixed:</b> Low</p>
+    </div>
+  </section>
+
+  <section id="c6">
+    <h2><span class="cat-num">06</span> · Access</h2>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">19</span><span class="chip warning">High</span></div>
+      <p class="quote">"Census TIGER misses tons of real private roads. I've had other tools wrongly flag good land as landlocked before — why would yours be different?"</p>
+      <p class="stat-line"><b>Solved today:</b> Partial (already disclosed in code, not in UI) · <b>Needs:</b> disclosure now · <b>Moat if fixed:</b> Low</p>
+    </div>
+    <div class="objection sev-moderate">
+      <div class="obj-head"><span class="obj-num">20</span><span class="chip good">Moderate</span></div>
+      <p class="quote">"A road touching the boundary on a map isn't the same as having a legal recorded easement — that's a title company's job, not yours."</p>
+      <p class="stat-line"><b>Solved today:</b> Partial · <b>Needs:</b> disclosure now · <b>Moat if fixed:</b> Low</p>
+    </div>
+  </section>
+
+  <section id="c7">
+    <h2><span class="cat-num">07</span> · Utilities</h2>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">21</span><span class="chip warning">High</span></div>
+      <p class="quote">"Your utility check is just counting nearby buildings. That's a guess, not an answer."</p>
+      <p class="stat-line"><b>Solved today:</b> Partial, already disclosed as a proxy · <b>Needs:</b> disclosure now · <b>Moat if fixed:</b> Low (no real data source exists anywhere)</p>
+    </div>
+    <div class="objection sev-moderate">
+      <div class="obj-head"><span class="obj-num">22</span><span class="chip good">Moderate</span></div>
+      <p class="quote">"So I still have to call the utility company myself. You haven't saved me that step at all."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> better UX (frame it honestly as a screening signal, not an answer) · <b>Moat if fixed:</b> Low</p>
+    </div>
+  </section>
+
+  <section id="c8">
+    <h2><span class="cat-num">08</span> · Septic / sewer</h2>
+    <div class="objection sev-moderate">
+      <div class="obj-head"><span class="obj-num">23</span><span class="chip good">Moderate</span></div>
+      <p class="quote">"'Very limited' could mean an $8,000 system or an $80,000 system. I have no idea which."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> more data + better logic · <b>Moat if fixed:</b> Medium</p>
+    </div>
+    <div class="objection sev-moderate">
+      <div class="obj-head"><span class="obj-num">24</span><span class="chip good">Moderate</span></div>
+      <p class="quote">"No sewer‑availability check at all if the parcel is actually near municipal sewer — you only handle the rural septic case."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> more data · <b>Moat if fixed:</b> Low</p>
+    </div>
+  </section>
+
+  <section id="c9">
+    <h2><span class="cat-num">09</span> · Wetlands / environment</h2>
+    <div class="objection sev-moderate">
+      <div class="obj-head"><span class="obj-num">25</span><span class="chip good">Moderate</span></div>
+      <p class="quote">"National wetlands layers can be years behind a real Army Corps delineation."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> disclosure now · <b>Moat if fixed:</b> Low</p>
+    </div>
+    <div class="objection sev-moderate">
+      <div class="obj-head"><span class="obj-num">26</span><span class="chip good">Moderate</span></div>
+      <p class="quote">"You check contamination within 2 kilometers — that radius is arbitrary. A site at 2.1km wouldn't show up at all."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> better logic (configurable radius) + disclosure now · <b>Moat if fixed:</b> Low</p>
+    </div>
+  </section>
+
+  <section id="c10">
+    <h2><span class="cat-num">10</span> · Flood</h2>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">27</span><span class="chip warning">High</span></div>
+      <p class="quote">"FEMA maps are famously outdated in a lot of counties. I've had deals blow up when 'Zone X' on paper didn't match reality on the ground."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> disclosure now · <b>Moat if fixed:</b> Low</p>
+    </div>
+    <div class="objection sev-moderate">
+      <div class="obj-head"><span class="obj-num">28</span><span class="chip good">Moderate</span></div>
+      <p class="quote">"You don't distinguish AE from VE flood zones — those have very different insurance and buildability implications."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> better logic (data already carries this) · <b>Moat if fixed:</b> Medium</p>
+    </div>
+  </section>
+
+  <section id="c11">
+    <h2><span class="cat-num">11</span> · Zoning</h2>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">29</span><span class="chip warning">High</span></div>
+      <p class="quote">"Even where zoning exists, you just show me a code like 'RU‑1' — I'd have to go look up what that actually allows anyway."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> more data + better UX · <b>Moat if fixed:</b> High</p>
+    </div>
+    <div class="objection sev-moderate">
+      <div class="obj-head"><span class="obj-num">30</span><span class="chip good">Moderate</span></div>
+      <p class="quote">"No signal on pending rezoning or a building moratorium — that can make or break a deal in a hot area."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> more data · <b>Moat if fixed:</b> Medium</p>
+    </div>
+  </section>
+
+  <section id="c12">
+    <h2><span class="cat-num">12</span> · Parcel / legal issues</h2>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">31</span><span class="chip warning">High</span></div>
+      <p class="quote">"No real title or lien search beyond a basic tax flag. I could still walk into an easement or HOA covenant nightmare."</p>
+      <p class="stat-line"><b>Solved today:</b> No (inherently not automatable) · <b>Needs:</b> disclosure now · <b>Moat if fixed:</b> Low</p>
+    </div>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">32</span><span class="chip warning">High</span></div>
+      <p class="quote">"Zero mineral‑rights information, and in some states that's an outright dealbreaker."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> disclosure now · <b>Moat if fixed:</b> Low</p>
+    </div>
+    <div class="objection sev-moderate">
+      <div class="obj-head"><span class="obj-num">33</span><span class="chip good">Moderate</span></div>
+      <p class="quote">"Vacant land constantly has probate or heirship issues you don't flag at all."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> more data · <b>Moat if fixed:</b> Medium</p>
+    </div>
+  </section>
+
+  <section id="c13">
+    <h2><span class="cat-num">13</span> · Owner information</h2>
+    <div class="objection sev-critical">
+      <div class="obj-head"><span class="obj-num">34</span><span class="chip critical">Critical</span></div>
+      <p class="quote">"I need a phone number and email up front, not a separate paid tool I have to bring myself."</p>
+      <p class="stat-line"><b>Solved today:</b> Partial (available, but requires a 3rd account) · <b>Needs:</b> better UX (make it feel bundled) · <b>Moat if fixed:</b> Medium</p>
+    </div>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">35</span><span class="chip warning">High</span></div>
+      <p class="quote">"No motivation score, no life‑event triggers like divorce or death. Every owner just looks the same to me."</p>
+      <p class="stat-line"><b>Solved today:</b> Partial (tax flags exist as one signal) · <b>Needs:</b> more data + better logic · <b>Moat if fixed:</b> High</p>
+    </div>
+    <div class="objection sev-moderate">
+      <div class="obj-head"><span class="obj-num">36</span><span class="chip good">Moderate</span></div>
+      <p class="quote">"What if the owner already passed this to an heir? Am I chasing outdated info?"</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> disclosure now · <b>Moat if fixed:</b> Low</p>
+    </div>
+  </section>
+
+  <section id="c14">
+    <h2><span class="cat-num">14</span> · Valuation</h2>
+    <div class="objection sev-critical">
+      <div class="obj-head"><span class="obj-num">37</span><span class="chip critical">Critical</span></div>
+      <p class="quote">"No AVM or price‑per‑acre benchmark. I have no idea if the assessed value is anywhere near real market pricing."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> more data + better logic · <b>Moat if fixed:</b> High</p>
+    </div>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">38</span><span class="chip warning">High</span></div>
+      <p class="quote">"Land value comes straight from the assessor, which is notoriously behind actual market pricing in an appreciating area."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> disclosure now · <b>Moat if fixed:</b> Low</p>
+    </div>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">39</span><span class="chip warning">High</span></div>
+      <p class="quote">"No way to see what similar land actually sold for nearby."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> more data · <b>Moat if fixed:</b> High</p>
+    </div>
+  </section>
+
+  <section id="c15">
+    <h2><span class="cat-num">15</span> · Workflow</h2>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">40</span><span class="chip warning">High</span></div>
+      <p class="quote">"I can't scan a whole state or region in one pass — it's one city or county at a time."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> better logic (batching) · <b>Moat if fixed:</b> High</p>
+    </div>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">41</span><span class="chip warning">High</span></div>
+      <p class="quote">"There's no CRM, no pipeline, no way to track who I've already contacted or made an offer to."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> more logic/features · <b>Moat if fixed:</b> Medium</p>
+    </div>
+    <div class="objection sev-moderate">
+      <div class="obj-head"><span class="obj-num">42</span><span class="chip good">Moderate</span></div>
+      <p class="quote">"Skip tracing is one manual click per lead. There's no flow from search straight to contact to offer."</p>
+      <p class="stat-line"><b>Solved today:</b> Partial (bulk exists, but feels bolted on) · <b>Needs:</b> better UX · <b>Moat if fixed:</b> Medium</p>
+    </div>
+  </section>
+
+  <section id="c16">
+    <h2><span class="cat-num">16</span> · UX</h2>
+    <div class="objection sev-critical">
+      <div class="obj-head"><span class="obj-num">43</span><span class="chip critical">Critical</span></div>
+      <p class="quote">"The parcel report is literally a JSON dump. I'm not a developer."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> better UX · <b>Moat if fixed:</b> High</p>
+    </div>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">44</span><span class="chip warning">High</span></div>
+      <p class="quote">"It's not mobile‑friendly, and I do most of my property research standing in a driveway on my phone."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> better UX · <b>Moat if fixed:</b> Medium</p>
+    </div>
+    <div class="objection sev-critical">
+      <div class="obj-head"><span class="obj-num">45</span><span class="chip critical">Critical</span></div>
+      <p class="quote">"There's no bottom‑line verdict. I have to read a dozen data points and decide for myself — that doesn't actually save me time."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> better logic + better UX · <b>Moat if fixed:</b> High</p>
+    </div>
+  </section>
+
+  <section id="c17">
+    <h2><span class="cat-num">17</span> · Speed</h2>
+    <div class="objection sev-moderate">
+      <div class="obj-head"><span class="obj-num">46</span><span class="chip good">Moderate</span></div>
+      <p class="quote">"A single report can take up to 20 seconds. That's slow when I'm trying to evaluate dozens of leads."</p>
+      <p class="stat-line"><b>Solved today:</b> Partial (already fixed from 110s → ~10‑20s same day) · <b>Needs:</b> more logic (caching, further optimization) · <b>Moat if fixed:</b> Low</p>
+    </div>
+    <div class="objection sev-moderate">
+      <div class="obj-head"><span class="obj-num">47</span><span class="chip good">Moderate</span></div>
+      <p class="quote">"No bulk 'run buildability on all 50 results' — I'd have to click into each one individually."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> better logic + UX · <b>Moat if fixed:</b> Medium</p>
+    </div>
+  </section>
+
+  <section id="c18">
+    <h2><span class="cat-num">18</span> · Pricing / value</h2>
+    <div class="objection sev-critical">
+      <div class="obj-head"><span class="obj-num">48</span><span class="chip critical">Critical</span></div>
+      <p class="quote">"I already pay for PropStream. Why would I pay for a second tool that doesn't even include phone numbers standard?"</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> better UX (positioning) + possibly bundled pricing · <b>Moat if fixed:</b> High</p>
+    </div>
+    <div class="objection sev-critical">
+      <div class="obj-head"><span class="obj-num">49</span><span class="chip critical">Critical</span></div>
+      <p class="quote">"You want me to bring two separate paid accounts on top of your own subscription. That's three bills for one workflow."</p>
+      <p class="stat-line"><b>Solved today:</b> No (deliberate zero‑liability design tradeoff) · <b>Needs:</b> better UX at minimum · <b>Moat if fixed:</b> Medium</p>
+    </div>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">50</span><span class="chip warning">High</span></div>
+      <p class="quote">"If you're priced anywhere near PropStream, you need to beat 130+ filters and nationwide coverage, not offer less."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> more data + better logic · <b>Moat if fixed:</b> High</p>
+    </div>
+  </section>
+
+  <section id="c19">
+    <h2><span class="cat-num">19</span> · Competition</h2>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">51</span><span class="chip warning">High</span></div>
+      <p class="quote">"PropStream already has 130+ filters and nationwide coverage. This feels like a fraction of that."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> more data · <b>Moat if fixed:</b> High</p>
+    </div>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">52</span><span class="chip warning">High</span></div>
+      <p class="quote">"LandApp already does flood, wetlands, hazard, and soil for $6 a month. Why would I pay more for a subset of what they offer?"</p>
+      <p class="stat-line"><b>Solved today:</b> Partial (this product's actual combination is broader per real research) · <b>Needs:</b> better UX (make the real breadth visible) · <b>Moat if fixed:</b> High</p>
+    </div>
+  </section>
+
+  <section id="c20">
+    <h2><span class="cat-num">20</span> · Customer acquisition</h2>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">53</span><span class="chip warning">High</span></div>
+      <p class="quote">"I've never heard of this brand. No reviews, no social proof, no reason to trust it with my business."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> nothing technical — go‑to‑market work · <b>Moat if fixed:</b> Low</p>
+    </div>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">54</span><span class="chip warning">High</span></div>
+      <p class="quote">"No free trial. I won't hand over payment info to try an unproven tool."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> business decision, not engineering · <b>Moat if fixed:</b> Medium</p>
+    </div>
+  </section>
+
+  <section id="c21">
+    <h2><span class="cat-num">21</span> · Retention / churn</h2>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">55</span><span class="chip warning">High</span></div>
+      <p class="quote">"If Realie or Tracerfy change pricing or shut down, does your whole product break? That's a scary thing to build my business on."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> disclosure now, contingency planning long‑term · <b>Moat if fixed:</b> Medium</p>
+    </div>
+    <div class="objection sev-moderate">
+      <div class="obj-head"><span class="obj-num">56</span><span class="chip good">Moderate</span></div>
+      <p class="quote">"Nothing brings me back between searches — no alerts, no notifications, no reason to log in regularly."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> more logic/features · <b>Moat if fixed:</b> High</p>
+    </div>
+  </section>
+
+  <section id="c22">
+    <h2><span class="cat-num">22</span> · Security</h2>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">57</span><span class="chip warning">High</span></div>
+      <p class="quote">"I'm pasting my Tracerfy API key into a website's input field. How do I know it's not being logged or stored somewhere?"</p>
+      <p class="stat-line"><b>Solved today:</b> Yes, technically (never stored server‑side) · <b>Needs:</b> better UX (say so explicitly, on‑screen) · <b>Moat if fixed:</b> Medium</p>
+    </div>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">58</span><span class="chip warning">High</span></div>
+      <p class="quote">"No visible privacy policy or security statement anywhere on the site."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> disclosure now · <b>Moat if fixed:</b> Low</p>
+    </div>
+  </section>
+
+  <section id="c23">
+    <h2><span class="cat-num">23</span> · API dependency</h2>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">59</span><span class="chip warning">High</span></div>
+      <p class="quote">"You're entirely dependent on a bunch of free government APIs that could go down or get rate‑limited any day. What happens to my report then?"</p>
+      <p class="stat-line"><b>Solved today:</b> Partial (graceful degradation exists per‑check) · <b>Needs:</b> disclosure now · <b>Moat if fixed:</b> Low</p>
+    </div>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">60</span><span class="chip warning">High</span></div>
+      <p class="quote">"If Realie's free tier disappears or changes pricing, does the core search feature just break for me?"</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> disclosure now, contingency long‑term · <b>Moat if fixed:</b> Medium</p>
+    </div>
+  </section>
+
+  <section id="c24">
+    <h2><span class="cat-num">24</span> · Scalability</h2>
+    <div class="objection sev-moderate">
+      <div class="obj-head"><span class="obj-num">61</span><span class="chip good">Moderate</span></div>
+      <p class="quote">"If a lot of customers use this at once, does the site just slow to a crawl on one small server?"</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> more infrastructure work · <b>Moat if fixed:</b> Low</p>
+    </div>
+    <div class="objection sev-moderate">
+      <div class="obj-head"><span class="obj-num">62</span><span class="chip good">Moderate</span></div>
+      <p class="quote">"Nothing here suggests I could ever search an entire state's worth of vacant parcels."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> more data + more logic · <b>Moat if fixed:</b> Medium</p>
+    </div>
+  </section>
+
+  <section id="c25">
+    <h2><span class="cat-num">25</span> · Liability</h2>
+    <div class="objection sev-critical">
+      <div class="obj-head"><span class="obj-num">63</span><span class="chip critical">Critical</span></div>
+      <p class="quote">"If I make an offer based on your buildability report and it's wrong, am I on the hook, or is there any protection here at all?"</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> disclosure now (ToS/liability limitation) · <b>Moat if fixed:</b> Low, but removes a real blocker</p>
+    </div>
+    <div class="objection sev-high">
+      <div class="obj-head"><span class="obj-num">64</span><span class="chip warning">High</span></div>
+      <p class="quote">"There's no Terms of Service anywhere. For a data product I'd rely on for real money, that's a red flag on its own."</p>
+      <p class="stat-line"><b>Solved today:</b> No · <b>Needs:</b> disclosure now · <b>Moat if fixed:</b> Low</p>
+    </div>
+  </section>
+
+  <section id="cancel">
+    <h2>The 10 things most likely to cause a cancellation</h2>
+    <div class="top10">
+      <ol>
+        <li>The placeholder‑boundary buildability score turns out wrong on a real deal (#1, #16)</li>
+        <li>A skip trace or repeat search silently costs money again with no caching (Finding L from the audit)</li>
+        <li>A government API goes down mid‑session with no graceful explanation shown (#59)</li>
+        <li>The customer discovers zoning "coverage" is really two counties, after already paying (#5)</li>
+        <li>Juggling three separate bills (this product, Realie, Tracerfy) becomes annoying enough to consolidate back to one tool (#49)</li>
+        <li>A competitor's price drops or bundles skip tracing standard, removing the remaining reason to stay (#48, #52)</li>
+        <li>No alerts or reason to log back in between active deals — the account goes quiet, then gets cancelled at renewal (#56)</li>
+        <li>A cold‑start delay on the free tier makes the product feel broken during a live client conversation</li>
+        <li>The customer relied on a "not covered" zoning result as if it meant "clean" and got burned (#6, #29)</li>
+        <li>Support goes quiet on a real data‑accuracy question, echoing exactly the kind of vendor experience already documented against Realie itself this week</li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="neverbuy">
+    <h2>The 10 things most likely to cause a customer to never buy</h2>
+    <div class="top10">
+      <ol>
+        <li>The raw‑JSON parcel report is the first thing a prospect sees in a demo (#43)</li>
+        <li>No case studies, reviews, or social proof from an unfamiliar brand (#14, #53)</li>
+        <li>No free trial to de‑risk trying an unproven tool (#54)</li>
+        <li>Realizing skip tracing requires a third‑party account before they can even see a phone number (#34)</li>
+        <li>Zoning coverage limited to two counties, discovered during evaluation, not after purchase (#5)</li>
+        <li>No visible confidence score or accuracy framing anywhere in the product (#15)</li>
+        <li>No ToS or privacy policy visible on the site at all (#58, #64)</li>
+        <li>Pricing that doesn't clearly beat an incumbent's much broader filter set (#50, #51)</li>
+        <li>No bottom‑line verdict — a prospect concludes "I'd still have to do the thinking myself" in the first five minutes (#45)</li>
+        <li>Not mobile‑friendly, discovered the moment they try it standing on a lot (#44)</li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="better">
+    <h2>The 10 things that could make a customer say "this is better than my current tool"</h2>
+    <div class="top10">
+      <ol>
+        <li>A synthesized pursue/investigate/pass verdict with a stated confidence level — no competitor researched today does this</li>
+        <li>Real parcel‑exact flood/wetland scoring once the placeholder‑boundary issue is fixed — genuinely differentiated even among specialists</li>
+        <li>Real government‑verified tax‑delinquency dollar amounts (not just a flag) — already true, needs surfacing better</li>
+        <li>The combination of septic + contamination + road‑access + broadband + 17‑hazard risk in one report — no single competitor bundles all of this today, confirmed by research</li>
+        <li>Full owner mailing address correctly separated from the (often undeliverable) property address — a real, quiet accuracy win most competitors don't get right</li>
+        <li>Transparent, itemized cost estimates before spending real money on a skip trace — most competitors hide the true unit economics</li>
+        <li>Explicit "not covered here" states instead of silent gaps, once built — an honesty differentiator competitors rarely bother with</li>
+        <li>A CSV export already formatted for direct upload to any mail provider, zero reformatting</li>
+        <li>A genuinely fast, cached report after the caching work lands — most competitors' "deep" reports are also slow</li>
+        <li>A clear, plain‑English deal score instead of 20 raw data fields — this is the single highest‑leverage thing on this entire list</li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="moat">
+    <h2>The 10 things that could create a real competitive moat</h2>
+    <div class="top10">
+      <ol>
+        <li>A genuinely accurate, real‑parcel‑boundary buildability engine — hard to copy well, easy to copy badly</li>
+        <li>A trustworthy, well‑calibrated confidence score per finding — requires real engineering discipline, not just a UI badge</li>
+        <li>A synthesized deal‑score verdict that's actually reliable over time — the kind of thing that earns word‑of‑mouth trust</li>
+        <li>Expanding real (not scraped) tax‑delinquency and zoning coverage county‑by‑county, the same patient method already proven twice this week</li>
+        <li>An owner‑motivation signal built from legitimate public triggers (tax distress, ownership duration, absentee status) — nobody researched today does this well</li>
+        <li>Nationwide comps/valuation built on real sales data, not assessor lag</li>
+        <li>A genuinely mobile‑first field experience, since this audience works from the field, not a desk</li>
+        <li>Saved searches with real new‑match alerting — turns a one‑time tool into a daily habit</li>
+        <li>A track record of publicly showing accuracy corrections when the product is wrong — nobody in this space does this, and it directly answers the trust objection</li>
+        <li>Bundled, one‑bill pricing that absorbs the Realie/Tracerfy cost structure instead of exposing it to the customer</li>
+      </ol>
+    </div>
+  </section>
+
+  <footer>
+    Adversarial review only — no code was written or changed. 64 objections covering all 25 requested categories. Cross‑reference with the architecture audit for the underlying evidence behind each rating.
+  </footer>
+</div>
