@@ -62,6 +62,42 @@
   .raw-toggle { font-size: 11px; color: #666; cursor: pointer; text-decoration: underline; margin: 10px 0 4px; display: inline-block; }
   #detail-raw { display: none; white-space: pre-wrap; font-size: 11px; background: #f7f7f7; padding: 8px; border-radius: 3px; }
   #detail-raw.open { display: block; }
+
+  /* Deal-potential decision engine UI -- same 4 semantic colors used
+     throughout the evidence report (green/yellow/red/gray), applied here
+     as a coarser, faster-to-scan signal. */
+  .deal-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; flex-shrink: 0; border: 1px solid rgba(0,0,0,0.15); }
+  .deal-dot.GREEN { background: #4caf50; }
+  .deal-dot.YELLOW { background: #d4a017; }
+  .deal-dot.RED { background: #c0392b; }
+  .deal-dot.GRAY, .deal-dot.unscored { background: #ccc; }
+  .result-item { display: flex; align-items: center; }
+  .result-main { flex: 1; min-width: 0; }
+  .deal-tier-label { font-weight: bold; }
+  .deal-tier-label.GREEN { color: #2e7d32; }
+  .deal-tier-label.YELLOW { color: #9c6f00; }
+  .deal-tier-label.RED { color: #a52a1f; }
+  .deal-tier-label.GRAY { color: #666; }
+
+  .decision-banner { padding: 12px 14px; border-radius: 4px; margin-bottom: 10px; border: 1px solid; }
+  .decision-banner.GREEN { background: #e8f5e9; border-color: #4caf50; }
+  .decision-banner.YELLOW { background: #fff8e1; border-color: #d4a017; }
+  .decision-banner.RED { background: #fdecea; border-color: #c0392b; }
+  .decision-banner.GRAY { background: #eceff1; border-color: #78909c; }
+  .decision-tier { font-size: 15px; font-weight: bold; margin-bottom: 4px; }
+  .decision-headline { font-size: 11px; color: #555; margin-bottom: 8px; }
+  .decision-action { font-size: 12px; font-style: italic; }
+
+  .decision-list-title { font-size: 11.5px; font-weight: bold; margin: 8px 0 3px; }
+  .decision-list { margin: 0 0 6px; padding-left: 16px; font-size: 11.5px; line-height: 1.5; }
+  .decision-list.positive li { color: #2e7d32; }
+  .decision-list.risk li { color: #9c6f00; }
+  .decision-list.killer li { color: #a52a1f; }
+  .decision-list.unknown li { color: #666; }
+
+  .level-toggle { font-size: 11px; color: #145a99; cursor: pointer; text-decoration: underline; margin: 6px 0; display: inline-block; }
+  .level-section { display: none; }
+  .level-section.open { display: block; }
 </style>
 </head>
 <body>
@@ -107,6 +143,8 @@
     <button onclick="downloadCsv()">Download CSV</button>
     <button onclick="openPrintView()">Print list</button>
   </div>
+  <button onclick="scoreAllResults()">Score Deal Potential (up to 20 -- takes 1-2 min)</button>
+  <div id="score-status" style="font-size:11px; color:#666; margin-top:4px;"></div>
   <div id="results"></div>
 
   <h2>Parcel detail</h2>
@@ -202,24 +240,95 @@ async function runSearch() {
 }
 
 function renderResults() {
-  const el = document.getElementById('results');
-  el.innerHTML = '';
+  const container = document.getElementById('results');
+  container.innerHTML = '';
   currentResults.forEach(r => {
     const div = document.createElement('div');
     div.className = 'result-item';
-    const flag = r.tax_flags && r.tax_flags.flagged ? ' <span class="flagged">[FLAG]</span>' : '';
-    const phone = r.owner_phone ? ` — ${r.owner_phone}` : '';
-    div.innerHTML = `<span style="cursor:pointer">${r.apn} -- ${r.acres ? r.acres.toFixed(2) : '?'} ac${flag}${phone}</span> `;
-    div.querySelector('span').onclick = () => loadParcelDetail(r.apn);
+
+    const dot = document.createElement('span');
+    dot.className = 'deal-dot ' + (r.color || 'unscored');
+    dot.title = r.color ? `${r.deal_potential}: ${r.headline || ''}` : 'Not yet scored -- use "Score Deal Potential" above.';
+    div.appendChild(dot);
+
+    const main = document.createElement('span');
+    main.className = 'result-main';
+    main.style.cursor = 'pointer';
+    main.appendChild(document.createTextNode(`${r.apn} -- ${r.acres ? r.acres.toFixed(2) : '?'} ac`));
+    if (r.deal_potential) {
+      main.appendChild(document.createTextNode(' -- '));
+      const tierSpan = document.createElement('span');
+      tierSpan.className = 'deal-tier-label ' + (r.color || '');
+      tierSpan.textContent = r.deal_potential;
+      main.appendChild(tierSpan);
+    }
+    if (r.tax_flags && r.tax_flags.flagged) {
+      main.appendChild(document.createTextNode(' '));
+      const flagSpan = document.createElement('span');
+      flagSpan.className = 'flagged';
+      flagSpan.textContent = '[FLAG]';
+      main.appendChild(flagSpan);
+    }
+    if (r.owner_phone) {
+      main.appendChild(document.createTextNode(' — ' + r.owner_phone));
+    }
+    main.onclick = () => loadParcelDetail(r.apn);
+    div.appendChild(main);
+
     if (!r.owner_phone) {
       const btn = document.createElement('button');
       btn.textContent = 'Skip Trace';
-      btn.style.cssText = 'font-size:10px; padding:1px 4px; margin-left:4px;';
+      btn.style.cssText = 'font-size:10px; padding:1px 4px; margin-left:4px; width:auto;';
       btn.onclick = (e) => { e.stopPropagation(); skipTraceOne(r.apn); };
       div.appendChild(btn);
     }
-    el.appendChild(div);
+    container.appendChild(div);
   });
+}
+
+async function scoreAllResults() {
+  if (!currentResults.length) { alert('Run a search first.'); return; }
+  const unscored = currentResults.filter(r => !r.deal_potential);
+  if (!unscored.length) { alert('Every result in this set already has a deal-potential score.'); return; }
+
+  const maxScore = 20;
+  const toScore = unscored.slice(0, maxScore);
+  const skippedNote = unscored.length > maxScore
+    ? `\n\n(Only the first ${maxScore} of ${unscored.length} unscored results will run per click -- run again for the rest.)`
+    : '';
+  const confirmed = confirm(
+    `This will run the full buildability/zoning/risk screen on ${toScore.length} parcel(s) to rate their ` +
+    `deal potential. This uses the same government data checks as opening a full parcel report, so it ` +
+    `typically takes 1-2 minutes for a batch this size (not billed -- these checks are all free).${skippedNote}\n\n` +
+    `Continue?`
+  );
+  if (!confirmed) return;
+
+  document.getElementById('score-status').textContent = `Scoring ${toScore.length} parcels... this can take a minute or two.`;
+  try {
+    const resp = await fetch('/api/parcel/score/bulk', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({parcels: toScore.map(r => ({apn: r.apn, raw: r.raw}))}),
+    });
+    const data = await resp.json();
+    if (data.error) { document.getElementById('score-status').textContent = 'Error: ' + data.error; return; }
+
+    let scored = 0;
+    data.results.forEach(res => {
+      const r = currentResults.find(x => x.apn === res.apn);
+      if (!r || res.error) return;
+      r.deal_potential = res.deal_potential;
+      r.color = res.color;
+      r.headline = res.headline;
+      scored++;
+    });
+    saveResultsToStorage();
+    renderResults();
+    renderMarkers();
+    document.getElementById('score-status').textContent = `Scored ${scored} of ${toScore.length} parcels.`;
+  } catch (e) {
+    document.getElementById('score-status').textContent = 'Error scoring results: ' + e;
+  }
 }
 
 function mergeSkipTraceResult(apn, trace) {
@@ -350,8 +459,9 @@ function renderMarkers() {
   markers = [];
   if (!currentResults.length) return;
   const bounds = [];
+  const DEAL_MARKER_COLOR = {GREEN: 'green', YELLOW: 'orange', RED: 'red', GRAY: 'gray'};
   currentResults.forEach(r => {
-    const color = r.tax_flags && r.tax_flags.flagged ? 'red' : 'green';
+    const color = DEAL_MARKER_COLOR[r.color] || (r.tax_flags && r.tax_flags.flagged ? 'red' : 'green');
     const marker = L.circleMarker([r.lat, r.lon], {radius: 6, color: color, fillOpacity: 0.7}).addTo(map);
     marker.bindTooltip(`${r.apn}<br>${r.acres ? r.acres.toFixed(2) : '?'} ac`);
     marker.on('click', () => loadParcelDetail(r.apn));
@@ -462,6 +572,40 @@ function renderFindingCard(f) {
   return card;
 }
 
+// --- Decision engine rendering (Level 1: fast decision, Level 2: why) ---
+// The evidence report below (renderEvidenceReport) becomes Level 3
+// (source-by-source evidence); the raw-JSON toggle further down is
+// Level 4. Nothing from the evidence report is removed -- it's collapsed
+// behind a toggle so the decision summary is the first thing a customer
+// sees, not buried under 16 category cards.
+
+function appendDecisionList(container, title, items, className) {
+  if (!items || !items.length) return;
+  container.appendChild(el('div', {className: 'decision-list-title', text: title}));
+  const ul = el('ul', {className: 'decision-list ' + className});
+  items.forEach(item => ul.appendChild(el('li', {text: item})));
+  container.appendChild(ul);
+}
+
+function renderDecisionSummary(container, decision) {
+  if (!decision || decision.error) {
+    container.appendChild(el('div', {className: 'finding-row', text: 'Deal-potential summary failed: ' + (decision && decision.error || 'no data')}));
+    return;
+  }
+
+  const banner = el('div', {className: `decision-banner ${decision.color || 'GRAY'}`});
+  banner.appendChild(el('div', {className: 'decision-tier', text: `Deal potential: ${decision.deal_potential}`}));
+  banner.appendChild(el('div', {className: 'decision-headline', text: decision.headline || ''}));
+  banner.appendChild(el('div', {className: 'decision-action', text: decision.recommended_action || ''}));
+  container.appendChild(banner);
+
+  appendDecisionList(container, 'Deal-killer risks', decision.deal_killer_risks, 'killer');
+  appendDecisionList(container, 'Top positive factors', decision.top_positive_factors, 'positive');
+  appendDecisionList(container, 'Top risks', decision.top_risks, 'risk');
+  appendDecisionList(container, 'Unknown / unverified for this parcel', decision.key_unknowns, 'unknown');
+  appendDecisionList(container, 'Next steps', decision.next_steps, '');
+}
+
 function renderEvidenceReport(container, evidence) {
   if (evidence.error) {
     container.appendChild(el('div', {className: 'finding-row', text: 'Evidence report failed: ' + evidence.error}));
@@ -539,7 +683,28 @@ async function loadParcelDetail(apn) {
     detailEl.appendChild(flagRow);
   }
 
-  renderEvidenceReport(detailEl, data.evidence || {});
+  renderDecisionSummary(detailEl, data.decision || {});
+
+  if (r && data.decision && !data.decision.error) {
+    r.deal_potential = data.decision.deal_potential;
+    r.color = data.decision.color;
+    r.headline = data.decision.headline;
+    saveResultsToStorage();
+    renderResults();
+    renderMarkers();
+  }
+
+  const evidenceToggle = el('span', {className: 'level-toggle', text: 'Show full evidence report (every category, source & limitation)'});
+  const evidenceBox = el('div', {className: 'level-section'});
+  renderEvidenceReport(evidenceBox, data.evidence || {});
+  evidenceToggle.onclick = () => {
+    evidenceBox.classList.toggle('open');
+    evidenceToggle.textContent = evidenceBox.classList.contains('open')
+      ? 'Hide full evidence report'
+      : 'Show full evidence report (every category, source & limitation)';
+  };
+  detailEl.appendChild(evidenceToggle);
+  detailEl.appendChild(evidenceBox);
 
   const rawToggle = el('span', {className: 'raw-toggle', text: 'Show raw data (for developers)'});
   const rawBox = el('pre', {className: '', text: JSON.stringify(data, null, 2)});

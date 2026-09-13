@@ -2952,6 +2952,43 @@ STATUS_CAUTION = "CAUTION"
 STATUS_CONCERN = "CONCERN"
 STATUS_UNKNOWN = "UNKNOWN"
 
+# Categories that can never rise above an indirect proxy signal no matter
+# how good the result is (a nearby-building count never confirms a real
+# utility hookup) -- excluded from the pass/fail screening gate in both
+# _finalize_evidence_report's overall_verdict AND build_decision_summary's
+# deal_potential tier, for the identical reason in both places: scoring
+# them like a normal risk would make the best possible tier unreachable
+# for every parcel, which is its own kind of dishonesty. Shared at module
+# level so the two derivations can't drift out of sync with each other.
+_PERMANENTLY_INDICATIVE_CATEGORIES = {
+    "Utilities (electric/water/sewer)",
+    "Nearby development / surrounding houses",
+}
+
+# Concern-level findings in these categories are, on their own, severe
+# enough to override every other signal and force a hard "Avoid" in the
+# decision engine below -- a landlocked parcel or one that's mostly
+# flood/wetland is a different kind of problem than "several open
+# questions," and shouldn't just add one more point to a tally.
+_HARD_STOP_CATEGORIES = {
+    "Physical road access",
+    "Environmental restrictions / protected areas",
+    "Physical usable area (screening only)",
+}
+
+
+def _screenable_findings(findings: list[dict]) -> list[dict]:
+    """The subset of findings this toolkit can actually screen on: not the
+    categories that are REQUIRES_VERIFICATION in every report by design
+    (easements, setbacks, etc. -- always unknown, so including them would
+    make every parcel look identically 'insufficient data'), and not the
+    permanently-proxy-only categories above."""
+    return [
+        f for f in findings
+        if f["evidence_level"] != EVIDENCE_REQUIRES_VERIFICATION
+        and f["category"] not in _PERMANENTLY_INDICATIVE_CATEGORIES
+    ]
+
 
 def make_finding(
     category: str,
@@ -3439,15 +3476,7 @@ def _finalize_evidence_report(findings: list[dict], tax_flags: dict, owner_maili
     #      unreachable verdict for every single parcel, which is its own
     #      kind of dishonesty (a tier nothing can ever earn is as
     #      misleading as a tier everything earns too easily).
-    _PERMANENTLY_INDICATIVE_CATEGORIES = {
-        "Utilities (electric/water/sewer)",
-        "Nearby development / surrounding houses",
-    }
-    screenable = [
-        f for f in findings
-        if f["evidence_level"] != EVIDENCE_REQUIRES_VERIFICATION
-        and f["category"] not in _PERMANENTLY_INDICATIVE_CATEGORIES
-    ]
+    screenable = _screenable_findings(findings)
     concern_count = sum(1 for f in screenable if f["status"] == STATUS_CONCERN)
     unknown_count = sum(1 for f in screenable if f["status"] == STATUS_UNKNOWN)
     caution_count = sum(1 for f in screenable if f["status"] == STATUS_CAUTION)
@@ -3506,6 +3535,184 @@ def _build_scores(findings: list[dict]) -> dict:
         "septic_sanitation_risk": status_of("Septic / sanitation"),
         "environmental_risk": status_of("Wetlands", "Flood / floodway", "Environmental restrictions / protected areas"),
         "zoning_risk": status_of("Zoning", "Minimum lot size, setbacks & frontage requirements"),
+    }
+
+
+# --------------------------------------------------------------------------
+# Decision engine -- turns the evidence report above into an actual
+# recommendation. Deliberately NOT a black-box score: every tier and every
+# bullet below is a plain if/else over statuses this toolkit already
+# computed and can point back to. The question this whole layer exists to
+# answer, in the customer's own words: "does this parcel deserve the next
+# 10 minutes of my time?"
+# --------------------------------------------------------------------------
+
+DEAL_TIER_COLOR = {
+    "Strong": "GREEN",
+    "Moderate": "YELLOW",
+    "Weak": "YELLOW",
+    "Avoid": "RED",
+    "Insufficient information": "GRAY",
+}
+
+
+def _insufficient_decision(reason: str) -> dict:
+    return {
+        "deal_potential": "Insufficient information",
+        "color": "GRAY",
+        "headline": reason,
+        "recommended_action": "Not enough data came back to screen this parcel -- try running the report again, or verify the basics (road access, flood zone, zoning) manually before spending time on it.",
+        "top_positive_factors": [],
+        "top_risks": [],
+        "deal_killer_risks": [],
+        "key_unknowns": [],
+        "next_steps": ["Re-run the parcel report; if it fails again, verify manually with the county before investing time."],
+    }
+
+
+def build_decision_summary(evidence: dict, buildability: dict, tax_flags: dict) -> dict:
+    """
+    Pure synthesis over build_evidence_report's already-computed output plus
+    two raw buildability fields (nearby-building count, zoning coverage)
+    that the evidence report deliberately keeps at a capped CAUTION status
+    for evidence-level honesty, but which are still genuine, informative
+    signal for a fast go/no-go read -- the same underlying number just
+    means something different at this layer ("is this worth 10 minutes?")
+    than it does at the evidence layer ("how much can we trust this?").
+    Zero new network calls.
+
+    Returns:
+        {
+            "deal_potential": "Strong" | "Moderate" | "Weak" | "Avoid" | "Insufficient information",
+            "color": "GREEN" | "YELLOW" | "RED" | "GRAY",
+            "headline": short one-line summary for the search-results list,
+            "recommended_action": one sentence,
+            "top_positive_factors": [str, ...],
+            "top_risks": [str, ...],
+            "deal_killer_risks": [str, ...],
+            "key_unknowns": [str, ...],   # parcel-specific, not the standing 5 always-unknown categories
+            "next_steps": [str, ...],     # top 3, concern-first
+        }
+    """
+    if not evidence or evidence.get("error") or not evidence.get("findings"):
+        return _insufficient_decision("Evidence report unavailable for this parcel.")
+
+    findings = evidence["findings"]
+    by_cat = {f["category"]: f for f in findings}
+    screenable = _screenable_findings(findings)
+
+    if not screenable:
+        return _insufficient_decision("No checkable categories returned usable data.")
+
+    concerns = [f for f in screenable if f["status"] == STATUS_CONCERN]
+    cautions = [f for f in screenable if f["status"] == STATUS_CAUTION]
+    clears = [f for f in screenable if f["status"] == STATUS_CLEAR]
+    unknowns = [f for f in screenable if f["status"] == STATUS_UNKNOWN]
+    hard_stops = [f for f in concerns if f["category"] in _HARD_STOP_CATEGORIES]
+
+    tax_flagged = bool(tax_flags and tax_flags.get("flagged"))
+
+    # ---- tier -------------------------------------------------------------
+    if len(unknowns) > len(screenable) / 2:
+        return _insufficient_decision(
+            f"{len(unknowns)} of {len(screenable)} checkable categories came back with no usable data."
+        )
+    elif hard_stops or len(concerns) >= 3:
+        tier = "Avoid"
+    elif concerns:
+        tier = "Weak"
+    elif len(cautions) >= 3 or len(unknowns) > len(screenable) / 3:
+        tier = "Moderate"
+    else:
+        tier = "Strong"
+    color = DEAL_TIER_COLOR[tier]
+
+    # ---- positive factors (level 1/2 material) -----------------------------
+    # The two manually-derived items go first -- they're the most decision-
+    # salient signals (matching the user-facing worked example: "existing
+    # homes nearby", "electric infrastructure nearby") and shouldn't get
+    # crowded out of the top-N by a long run of plainer CLEAR findings.
+    positives = []
+
+    nearby = buildability.get("nearby_development") or {}
+    count = nearby.get("nearby_building_count")
+    if isinstance(count, (int, float)) and count >= 5:
+        positives.append(
+            f"{int(count)} buildings mapped nearby -- electric/water infrastructure is likely "
+            f"present in the area (not a confirmed hookup)."
+        )
+
+    zf = by_cat.get("Zoning")
+    if zf and zf["evidence_level"] == EVIDENCE_INDICATED:
+        positives.append(f"Zoning is on file for this location: {zf['establishes']}")
+
+    positives.extend(f["establishes"] for f in clears)
+
+    # ---- risks (manageable, yellow) -----------------------------------------
+    risks = [f"{f['category']}: {f['explanation']}" for f in cautions]
+    if isinstance(count, (int, float)) and count == 0:
+        risks.append("No buildings found nearby -- utility access is unconfirmed and could require costly extension.")
+    if zf and zf["evidence_level"] != EVIDENCE_INDICATED:
+        risks.append("Zoning is not covered by this toolkit for this location -- entirely unknown, not confirmed clear.")
+
+    # ---- deal-killer risks (red) ---------------------------------------------
+    ordered_concerns = sorted(concerns, key=lambda f: 0 if f["category"] in _HARD_STOP_CATEGORIES else 1)
+    deal_killers = [f"{f['category']}: {f['explanation']}" for f in ordered_concerns]
+    if tax_flagged:
+        lien_ct = tax_flags.get("lien_count")
+        deal_killers.append(
+            f"Tax/lien flags on file{f' ({lien_ct} lien(s))' if lien_ct else ''} -- may complicate clear "
+            f"title at closing. Note: tax delinquency can also indicate a motivated seller, which may "
+            f"still make this worth pursuing -- verify the lien situation before assuming either way."
+        )
+
+    # ---- unknowns worth naming (parcel-specific, not the standing 5) --------
+    key_unknowns = [f["category"] for f in unknowns]
+
+    next_steps = evidence.get("what_to_verify_next", [])[:3]
+
+    # ---- recommended action --------------------------------------------------
+    if tier == "Avoid":
+        if hard_stops:
+            lead = hard_stops[0]
+            if lead["category"] == "Physical road access":
+                recommended_action = "Do not spend time pursuing this parcel until legal access is verified."
+            elif lead["category"] == "Physical usable area (screening only)":
+                recommended_action = "Do not spend time pursuing this parcel until the flood/wetland impact on usable area is resolved."
+            else:
+                recommended_action = f"Do not spend time pursuing this parcel until {lead['category'].lower()} is resolved."
+        else:
+            names = ", ".join(f["category"] for f in concerns[:3])
+            recommended_action = f"Do not spend time pursuing this parcel -- {len(concerns)} independent concerns were found ({names}); resolve or rule out each before any further work."
+    elif tier == "Weak":
+        lead = concerns[0]["category"]
+        recommended_action = f"Proceed cautiously, if at all -- verify {lead.lower()} directly before investing more time or money."
+    elif tier == "Moderate":
+        lead_cat = (cautions[0]["category"] if cautions else (key_unknowns[0] if key_unknowns else "the open items above"))
+        recommended_action = f"Proceed to owner research, but verify {lead_cat.lower()} before making a serious offer."
+    else:  # Strong
+        still_verify = "legal access and title"
+        if zf and zf["evidence_level"] != EVIDENCE_INDICATED:
+            still_verify += " and zoning (not covered by this toolkit for this location)"
+        recommended_action = f"This parcel screens well on everything this toolkit can check. Proceed to owner research and outreach, but still verify {still_verify} before a serious offer -- no free data source confirms those."
+
+    headline = (
+        f"{len(positives)} positive{'s' if len(positives) != 1 else ''}, "
+        f"{len(deal_killers)} deal-killer{'s' if len(deal_killers) != 1 else ''}, "
+        f"{len(risks)} risk{'s' if len(risks) != 1 else ''}, "
+        f"{len(key_unknowns)} unknown{'s' if len(key_unknowns) != 1 else ''}"
+    )
+
+    return {
+        "deal_potential": tier,
+        "color": color,
+        "headline": headline,
+        "recommended_action": recommended_action,
+        "top_positive_factors": positives[:5],
+        "top_risks": risks[:5],
+        "deal_killer_risks": deal_killers[:5],
+        "key_unknowns": key_unknowns[:5],
+        "next_steps": next_steps,
     }
 
 

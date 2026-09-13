@@ -8,6 +8,7 @@ before this goes public).
 
 Run: python app.py, then open http://127.0.0.1:5000 in a browser.
 """
+import concurrent.futures
 import os
 import sys
 
@@ -226,8 +227,21 @@ def api_parcel_report(apn):
     except Exception as e:
         evidence = {"error": str(e)}
 
+    # The decision engine ("does this parcel deserve the next 10 minutes?")
+    # sits on top of the evidence report above -- zero new network calls,
+    # same "failed sub-call is handled, not fatal" treatment.
+    try:
+        decision = v.build_decision_summary(
+            evidence if "error" not in evidence else {},
+            buildability if "error" not in buildability else {},
+            tax_flags,
+        )
+    except Exception as e:
+        decision = {"error": str(e)}
+
     return jsonify({
         "apn": apn,
+        "decision": decision,
         "evidence": evidence,
         "buildability": buildability,
         "tax_assessment": v.get_tax_assessment_info_realie(raw),
@@ -235,6 +249,76 @@ def api_parcel_report(apn):
         "tax_flags": tax_flags,
         "listing_links": listing_links,
         "zoning": zoning,
+    })
+
+
+@app.route("/api/parcel/score/bulk", methods=["POST"])
+def api_score_bulk():
+    """
+    Scores a batch of search results with JUST the deal-potential tier
+    (not the full report) so the results list can show a color/tier per
+    row without forcing a user to open every parcel one at a time. This
+    runs the exact same government-API calls as a full parcel report, per
+    parcel -- there is no cheaper way to get this signal -- which is why
+    it is an explicit, user-triggered action with its own time/cost
+    framing in the UI, the same pattern already used for skip-trace-all,
+    rather than something /api/search runs automatically for every result.
+    Capped at 20 parcels per call and run 4-at-a-time so a large result
+    set doesn't hammer the free government APIs this whole toolkit runs on.
+    """
+    data = request.get_json(force=True) or {}
+    parcels = data.get("parcels") or []
+    MAX_PARCELS = 20
+    to_score = parcels[:MAX_PARCELS]
+
+    def score_one(p):
+        apn = p.get("apn")
+        raw = p.get("raw") or {}
+        lat, lon = raw.get("latitude"), raw.get("longitude")
+        try:
+            buildability = v.get_comprehensive_buildability_report(_placeholder_boundary(lat, lon))
+        except Exception as e:
+            buildability = {"error": str(e)}
+        try:
+            zoning = v.check_zoning_district(lat, lon)
+        except Exception as e:
+            zoning = {"error": str(e)}
+        tax_flags = v.get_tax_flags(raw)
+        owner_mailing = v.get_owner_mailing_address(raw)
+        try:
+            evidence = v.build_evidence_report(
+                buildability if "error" not in buildability else {},
+                zoning if "error" not in zoning else {},
+                tax_flags, owner_mailing,
+            )
+            decision = v.build_decision_summary(
+                evidence if "error" not in evidence else {},
+                buildability if "error" not in buildability else {},
+                tax_flags,
+            )
+        except Exception as e:
+            decision = {"error": str(e)}
+        return {
+            "apn": apn,
+            "deal_potential": decision.get("deal_potential"),
+            "color": decision.get("color"),
+            "headline": decision.get("headline"),
+        }
+
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {pool.submit(score_one, p): p for p in to_score}
+        for future in concurrent.futures.as_completed(futures):
+            p = futures[future]
+            try:
+                results.append(future.result())
+            except Exception as e:
+                results.append({"apn": p.get("apn"), "error": str(e)})
+
+    return jsonify({
+        "count": len(results),
+        "results": results,
+        "skipped": max(0, len(parcels) - len(to_score)),
     })
 
 
