@@ -98,6 +98,25 @@
   .level-toggle { font-size: 11px; color: #145a99; cursor: pointer; text-decoration: underline; margin: 6px 0; display: inline-block; }
   .level-section { display: none; }
   .level-section.open { display: block; }
+
+  /* Screening: filters + Priority Picks */
+  .filter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; align-items: end; }
+  .filter-grid label { margin-top: 6px; }
+  .filter-check { display: flex; align-items: center; gap: 5px; font-size: 12px; margin-top: 6px; color: #333; }
+  .filter-check input { width: auto; margin: 0; }
+  #filter-status { font-size: 11px; color: #666; margin: 4px 0; }
+  .clear-filters { font-size: 11px; color: #145a99; cursor: pointer; text-decoration: underline; background: none; border: none; padding: 0; width: auto; margin-top: 4px; }
+
+  .pick-section-title { font-size: 12px; font-weight: bold; margin: 12px 0 4px; }
+  .pick-section-hint { font-size: 10.5px; color: #777; margin: -2px 0 6px; }
+  .pick-row { display: flex; align-items: flex-start; gap: 6px; padding: 6px; border: 1px solid #e2e2e2; border-radius: 4px; margin-bottom: 5px; cursor: pointer; }
+  .pick-row:hover { background: #f7f7f7; }
+  .pick-row .deal-dot { margin-top: 2px; }
+  .pick-main { flex: 1; min-width: 0; }
+  .pick-title { font-size: 12px; font-weight: bold; }
+  .pick-reason { font-size: 10.5px; color: #2e7d32; margin-top: 2px; line-height: 1.35; }
+  .pick-reason.negative { color: #a52a1f; }
+  .pick-reason.note { color: #9c6f00; font-style: italic; }
 </style>
 </head>
 <body>
@@ -138,12 +157,61 @@
   <button onclick="skipTraceAll()">Skip Trace All Results</button>
   <div id="skiptrace-status" style="font-size:12px; color:#666; margin-top:4px;"></div>
 
+  <h2>Screen &amp; prioritize</h2>
+  <p style="font-size:11px; color:#666; margin:2px 0 6px;">
+    These filters/sort work instantly on results you already have -- free, no new Realie tokens spent.
+    Nothing is deleted from your result set, only reordered/hidden from view.
+  </p>
+  <div class="filter-grid">
+    <div>
+      <label>Min acres</label>
+      <input id="filter-min-acres" type="number" step="0.1" placeholder="any">
+    </div>
+    <div>
+      <label>Max acres</label>
+      <input id="filter-max-acres" type="number" step="0.1" placeholder="any">
+    </div>
+  </div>
+  <label>Min years owned</label>
+  <input id="filter-min-years" type="number" step="1" placeholder="any">
+  <label class="filter-check"><input type="checkbox" id="filter-tax-flagged"> Tax lien / foreclosure flagged only</label>
+  <label class="filter-check"><input type="checkbox" id="filter-absentee"> Absentee owner only (different city/state)</label>
+  <label class="filter-check"><input type="checkbox" id="filter-individual"> Individual owner only</label>
+  <label>Deal potential (after Score Deal Potential)</label>
+  <select id="filter-deal-potential">
+    <option value="">All</option>
+    <option value="Strong">Strong</option>
+    <option value="Moderate">Moderate</option>
+    <option value="Weak">Weak</option>
+    <option value="Avoid">Avoid</option>
+    <option value="Insufficient information">Insufficient information</option>
+    <option value="unscored">Not yet deep-screened</option>
+  </select>
+  <label>Sort by</label>
+  <select id="sort-by">
+    <option value="priority">Priority (recommended)</option>
+    <option value="instant_score">Instant score</option>
+    <option value="acres_desc">Acres (high to low)</option>
+    <option value="acres_asc">Acres (low to high)</option>
+    <option value="land_value_desc">Land value (high to low)</option>
+  </select>
+  <button type="button" class="clear-filters" onclick="clearFilters()">Clear all filters</button>
+  <div id="filter-status"></div>
+
+  <h2>Priority Picks</h2>
+  <p style="font-size:11px; color:#666; margin:2px 0 6px;">
+    Answers "of these results, which deserve my attention first?" -- combines instant signals
+    (tax/lien flags, absentee ownership, tenure, owner type) with Deal Potential once you've
+    run Score Deal Potential on a parcel.
+  </p>
+  <div id="priority-picks"></div>
+
   <h2>Results (<span id="result-count">0</span>)</h2>
   <div class="heat-toggle">
     <button onclick="downloadCsv()">Download CSV</button>
     <button onclick="openPrintView()">Print list</button>
   </div>
-  <button onclick="scoreAllResults()">Score Deal Potential (up to 20 -- takes 1-2 min)</button>
+  <button onclick="scoreAllResults()">Score Deal Potential (top 20 shown -- takes 1-2 min)</button>
   <div id="score-status" style="font-size:11px; color:#666; margin-top:4px;"></div>
   <div id="results"></div>
 
@@ -203,8 +271,7 @@ function restoreResultsFromStorage() {
     if (currentResults.length) {
       document.getElementById('result-count').textContent = currentResults.length;
       setStatus(`Restored ${currentResults.length} results from your last search.`);
-      renderResults();
-      renderMarkers();
+      refreshView();
       renderHeat();
     }
   } catch (e) {
@@ -232,23 +299,179 @@ async function runSearch() {
 
   currentResults = data.results;
   saveResultsToStorage();
-  setStatus(`Found ${data.count} genuinely vacant parcels.`);
+  setStatus(`Found ${data.count} genuinely vacant parcels, sorted by instant priority (highest first).`);
   document.getElementById('result-count').textContent = data.count;
+  refreshView();
+  renderHeat();
+}
+
+// --- Screening: filters, combined priority ranking, Priority Picks -----
+// Two ranking signals exist, and this is where they combine:
+//   1. instant_score -- free, computed for every result the moment a
+//      search returns (see build_instant_priority in vacant_land_search.py).
+//   2. deal_potential/color -- only present once a customer has explicitly
+//      run "Score Deal Potential" on a parcel (the slow, government-API-
+//      backed decision engine). Deliberately NOT run automatically for
+//      every result -- see that button's own comment for why.
+// DEAL_TIER_RANK gives scored parcels priority over unscored ones when
+// the tier is genuinely good/bad; unscored parcels sit in the middle
+// (rank 2, between Moderate and Weak) since "we haven't checked yet" is
+// neither a green light nor a red flag. Within any tier (including the
+// unscored middle tier), ties break by instant_score descending -- which
+// means BEFORE any deep-screening has happened, this sort is simply
+// "highest instant score first," exactly matching /api/search's own
+// default order.
+const DEAL_TIER_RANK = {
+  'Strong': 0, 'Moderate': 1, 'Weak': 3, 'Avoid': 4, 'Insufficient information': 5,
+};
+
+function priorityRank(r) {
+  const tierRank = r.deal_potential ? (DEAL_TIER_RANK[r.deal_potential] ?? 2) : 2;
+  return [tierRank, -(r.instant_score || 0)];
+}
+
+function comparePriority(a, b) {
+  const [aTier, aScore] = priorityRank(a);
+  const [bTier, bScore] = priorityRank(b);
+  return aTier !== bTier ? aTier - bTier : aScore - bScore;
+}
+
+function isAbsentee(r) {
+  if (!r.mail_state && !r.mail_city) return false;
+  if (r.mail_state && r.state && r.mail_state.toUpperCase() !== r.state.toUpperCase()) return true;
+  if (r.mail_city && r.city && r.mail_city.toUpperCase() !== r.city.toUpperCase()) return true;
+  return false;
+}
+
+function getFilteredResults() {
+  const minAcres = parseFloat(document.getElementById('filter-min-acres').value);
+  const maxAcres = parseFloat(document.getElementById('filter-max-acres').value);
+  const minYears = parseFloat(document.getElementById('filter-min-years').value);
+  const taxOnly = document.getElementById('filter-tax-flagged').checked;
+  const absenteeOnly = document.getElementById('filter-absentee').checked;
+  const individualOnly = document.getElementById('filter-individual').checked;
+  const dealFilter = document.getElementById('filter-deal-potential').value;
+  const sortBy = document.getElementById('sort-by').value;
+
+  let list = currentResults.filter(r => {
+    if (!isNaN(minAcres) && !(r.acres >= minAcres)) return false;
+    if (!isNaN(maxAcres) && !(r.acres <= maxAcres)) return false;
+    if (!isNaN(minYears) && !(r.ownership_years >= minYears)) return false;
+    if (taxOnly && !(r.tax_flags && r.tax_flags.flagged)) return false;
+    if (absenteeOnly && !isAbsentee(r)) return false;
+    if (individualOnly && r.owner_type !== 'individual') return false;
+    if (dealFilter === 'unscored' && r.deal_potential) return false;
+    if (dealFilter && dealFilter !== 'unscored' && r.deal_potential !== dealFilter) return false;
+    return true;
+  });
+
+  if (sortBy === 'priority') list.sort(comparePriority);
+  else if (sortBy === 'instant_score') list.sort((a, b) => (b.instant_score || 0) - (a.instant_score || 0));
+  else if (sortBy === 'acres_desc') list.sort((a, b) => (b.acres || 0) - (a.acres || 0));
+  else if (sortBy === 'acres_asc') list.sort((a, b) => (a.acres || 0) - (b.acres || 0));
+  else if (sortBy === 'land_value_desc') list.sort((a, b) => (b.land_value || 0) - (a.land_value || 0));
+
+  return list;
+}
+
+function clearFilters() {
+  ['filter-min-acres', 'filter-max-acres', 'filter-min-years'].forEach(id => document.getElementById(id).value = '');
+  ['filter-tax-flagged', 'filter-absentee', 'filter-individual'].forEach(id => document.getElementById(id).checked = false);
+  document.getElementById('filter-deal-potential').value = '';
+  document.getElementById('sort-by').value = 'priority';
+  refreshView();
+}
+
+function refreshView() {
   renderResults();
   renderMarkers();
-  renderHeat();
+  renderPriorityPicks();
+}
+
+function pickReasonLine(text, cls) {
+  return el('div', {className: 'pick-reason' + (cls ? ' ' + cls : ''), text: text});
+}
+
+function renderPickRow(r, opts) {
+  opts = opts || {};
+  const row = el('div', {className: 'pick-row'});
+  row.appendChild(el('span', {className: 'deal-dot ' + (r.color || 'unscored')}));
+
+  const main = el('div', {className: 'pick-main'});
+  const title = el('div', {className: 'pick-title'});
+  title.appendChild(document.createTextNode(`${r.apn} -- ${r.acres ? r.acres.toFixed(2) : '?'} ac`));
+  if (r.deal_potential) {
+    title.appendChild(document.createTextNode(' -- '));
+    title.appendChild(el('span', {className: 'deal-tier-label ' + (r.color || ''), text: r.deal_potential}));
+  } else {
+    title.appendChild(document.createTextNode(` -- instant score ${r.instant_score || 0}`));
+  }
+  main.appendChild(title);
+
+  const positive = opts.negative ? [] : (r.deal_potential ? (r.top_positive_factors || []) : (r.instant_reasons || []));
+  const negative = opts.negative ? (r.deal_killer_risks && r.deal_killer_risks.length ? r.deal_killer_risks : (r.top_risks || r.instant_negative_reasons || [])) : [];
+  positive.slice(0, 2).forEach(t => main.appendChild(pickReasonLine('+ ' + t)));
+  negative.slice(0, 2).forEach(t => main.appendChild(pickReasonLine('- ' + t, 'negative')));
+  if (opts.note) main.appendChild(pickReasonLine(opts.note, 'note'));
+
+  row.appendChild(main);
+  row.onclick = () => loadParcelDetail(r.apn);
+  return row;
+}
+
+function renderPriorityPicks() {
+  const container = document.getElementById('priority-picks');
+  container.innerHTML = '';
+  if (!currentResults.length) return;
+
+  const ranked = [...currentResults].sort(comparePriority);
+  const topN = Math.min(10, ranked.length);
+  const top = ranked.slice(0, topN);
+
+  container.appendChild(el('div', {className: 'pick-section-title', text: `Focus on these first (top ${topN} of ${currentResults.length})`}));
+  top.forEach(r => container.appendChild(renderPickRow(r)));
+
+  // "Hidden opportunity": screens Strong/Moderate on the deep, evidence-
+  // based check, yet has a low instant score -- meaning a customer
+  // skimming by tax flags/absentee-ownership/tenure alone, without
+  // deep-screening it, would likely have skipped right past it.
+  const hidden = currentResults.filter(r =>
+    (r.deal_potential === 'Strong' || r.deal_potential === 'Moderate') && (r.instant_score || 0) < 15
+  );
+  if (hidden.length) {
+    container.appendChild(el('div', {className: 'pick-section-title', text: `Hidden opportunities (${hidden.length})`}));
+    container.appendChild(el('div', {className: 'pick-section-hint', text: 'No obvious distress/absentee signal at search time, but screens well once checked.'}));
+    hidden.forEach(r => container.appendChild(renderPickRow(r, {note: 'Easy to overlook at a glance -- worth a look anyway.'})));
+  }
+
+  const lowest = currentResults.filter(r => r.deal_potential === 'Avoid')
+    .concat(currentResults.filter(r => r.deal_potential === 'Weak'))
+    .slice(0, 5);
+  if (lowest.length) {
+    container.appendChild(el('div', {className: 'pick-section-title', text: `Lowest priority (${lowest.length})`}));
+    container.appendChild(el('div', {className: 'pick-section-hint', text: 'Deep-screened and found real problems -- see why before spending any more time.'}));
+    lowest.forEach(r => container.appendChild(renderPickRow(r, {negative: true})));
+  }
 }
 
 function renderResults() {
   const container = document.getElementById('results');
   container.innerHTML = '';
-  currentResults.forEach(r => {
+  const filtered = getFilteredResults();
+  const statusEl = document.getElementById('filter-status');
+  statusEl.textContent = filtered.length === currentResults.length
+    ? `Showing all ${currentResults.length}.`
+    : `Showing ${filtered.length} of ${currentResults.length} (filtered).`;
+
+  filtered.forEach(r => {
     const div = document.createElement('div');
     div.className = 'result-item';
 
     const dot = document.createElement('span');
     dot.className = 'deal-dot ' + (r.color || 'unscored');
-    dot.title = r.color ? `${r.deal_potential}: ${r.headline || ''}` : 'Not yet scored -- use "Score Deal Potential" above.';
+    dot.title = r.color
+      ? `${r.deal_potential}: ${r.headline || ''}`
+      : `Not yet deep-screened. Instant score ${r.instant_score || 0}: ${(r.instant_reasons && r.instant_reasons[0]) || (r.instant_negative_reasons && r.instant_negative_reasons[0]) || ''}`;
     div.appendChild(dot);
 
     const main = document.createElement('span');
@@ -261,6 +484,8 @@ function renderResults() {
       tierSpan.className = 'deal-tier-label ' + (r.color || '');
       tierSpan.textContent = r.deal_potential;
       main.appendChild(tierSpan);
+    } else if (r.instant_score) {
+      main.appendChild(document.createTextNode(` -- score ${r.instant_score}`));
     }
     if (r.tax_flags && r.tax_flags.flagged) {
       main.appendChild(document.createTextNode(' '));
@@ -286,21 +511,37 @@ function renderResults() {
   });
 }
 
+function applyDecisionToResult(r, res) {
+  r.deal_potential = res.deal_potential;
+  r.color = res.color;
+  r.headline = res.headline;
+  r.recommended_action = res.recommended_action;
+  r.top_positive_factors = res.top_positive_factors;
+  r.deal_killer_risks = res.deal_killer_risks;
+  r.top_risks = res.top_risks;
+}
+
 async function scoreAllResults() {
   if (!currentResults.length) { alert('Run a search first.'); return; }
-  const unscored = currentResults.filter(r => !r.deal_potential);
-  if (!unscored.length) { alert('Every result in this set already has a deal-potential score.'); return; }
+  // Operates on the CURRENT filtered/sorted view, not the whole result
+  // set -- filter down to what you actually care about (e.g. "tax
+  // flagged only") first, then Score Deal Potential focuses on exactly
+  // those, highest instant-priority first.
+  const unscored = getFilteredResults()
+    .filter(r => !r.deal_potential)
+    .sort((a, b) => (b.instant_score || 0) - (a.instant_score || 0));
+  if (!unscored.length) { alert('Everything in the current filtered view already has a deal-potential score.'); return; }
 
   const maxScore = 20;
   const toScore = unscored.slice(0, maxScore);
   const skippedNote = unscored.length > maxScore
-    ? `\n\n(Only the first ${maxScore} of ${unscored.length} unscored results will run per click -- run again for the rest.)`
+    ? `\n\n(This scores the top ${maxScore} by instant priority out of ${unscored.length} unscored in the current view -- run again for the rest.)`
     : '';
   const confirmed = confirm(
-    `This will run the full buildability/zoning/risk screen on ${toScore.length} parcel(s) to rate their ` +
-    `deal potential. This uses the same government data checks as opening a full parcel report, so it ` +
-    `typically takes 1-2 minutes for a batch this size (not billed -- these checks are all free).${skippedNote}\n\n` +
-    `Continue?`
+    `This will run the full buildability/zoning/risk screen on the ${toScore.length} highest-priority ` +
+    `unscored parcel(s) in your current filtered view. This uses the same government data checks as opening ` +
+    `a full parcel report, so it typically takes 1-2 minutes for a batch this size (not billed -- these checks ` +
+    `are all free).${skippedNote}\n\nContinue?`
   );
   if (!confirmed) return;
 
@@ -317,14 +558,11 @@ async function scoreAllResults() {
     data.results.forEach(res => {
       const r = currentResults.find(x => x.apn === res.apn);
       if (!r || res.error) return;
-      r.deal_potential = res.deal_potential;
-      r.color = res.color;
-      r.headline = res.headline;
+      applyDecisionToResult(r, res);
       scored++;
     });
     saveResultsToStorage();
-    renderResults();
-    renderMarkers();
+    refreshView();
     document.getElementById('score-status').textContent = `Scored ${scored} of ${toScore.length} parcels.`;
   } catch (e) {
     document.getElementById('score-status').textContent = 'Error scoring results: ' + e;
@@ -427,8 +665,16 @@ function csvEscape(value) {
 
 function downloadCsv() {
   if (!currentResults.length) { alert('Run a search first.'); return; }
+  // Exports the CURRENT filtered/sorted view, not always every result --
+  // if you've narrowed down to your actual target list, the export
+  // should match what you're about to act on, not everything Realie
+  // ever returned.
+  const toExport = getFilteredResults();
+  if (toExport.length < currentResults.length) {
+    setStatus(`Exporting ${toExport.length} of ${currentResults.length} results (matches your current filters). Clear filters to export everything.`);
+  }
   const header = CSV_COLUMNS.map(([, label]) => csvEscape(label)).join(',');
-  const rows = currentResults.map(r =>
+  const rows = toExport.map(r =>
     CSV_COLUMNS.map(([key]) => {
       if (key === 'tax_flag') return csvEscape(r.tax_flags && r.tax_flags.flagged ? 'YES' : '');
       let v = r[key];
@@ -458,9 +704,14 @@ function renderMarkers() {
   markers.forEach(m => map.removeLayer(m));
   markers = [];
   if (!currentResults.length) return;
+  // Markers reflect the current filtered view, same as the results list
+  // and CSV export -- the map should highlight what's worth pursuing,
+  // not just plot every parcel Realie returned.
+  const shown = getFilteredResults();
+  if (!shown.length) return;
   const bounds = [];
   const DEAL_MARKER_COLOR = {GREEN: 'green', YELLOW: 'orange', RED: 'red', GRAY: 'gray'};
-  currentResults.forEach(r => {
+  shown.forEach(r => {
     const color = DEAL_MARKER_COLOR[r.color] || (r.tax_flags && r.tax_flags.flagged ? 'red' : 'green');
     const marker = L.circleMarker([r.lat, r.lon], {radius: 6, color: color, fillOpacity: 0.7}).addTo(map);
     marker.bindTooltip(`${r.apn}<br>${r.acres ? r.acres.toFixed(2) : '?'} ac`);
@@ -686,12 +937,9 @@ async function loadParcelDetail(apn) {
   renderDecisionSummary(detailEl, data.decision || {});
 
   if (r && data.decision && !data.decision.error) {
-    r.deal_potential = data.decision.deal_potential;
-    r.color = data.decision.color;
-    r.headline = data.decision.headline;
+    applyDecisionToResult(r, data.decision);
     saveResultsToStorage();
-    renderResults();
-    renderMarkers();
+    refreshView();
   }
 
   const evidenceToggle = el('span', {className: 'level-toggle', text: 'Show full evidence report (every category, source & limitation)'});
@@ -716,6 +964,13 @@ async function loadParcelDetail(apn) {
   detailEl.appendChild(rawToggle);
   detailEl.appendChild(rawBox);
 }
+
+['filter-min-acres', 'filter-max-acres', 'filter-min-years'].forEach(id =>
+  document.getElementById(id).addEventListener('input', refreshView)
+);
+['filter-tax-flagged', 'filter-absentee', 'filter-individual', 'filter-deal-potential', 'sort-by'].forEach(id =>
+  document.getElementById(id).addEventListener('change', refreshView)
+);
 
 document.getElementById('delinquency-place').addEventListener('change', function() {
   const opt = this.selectedOptions[0];

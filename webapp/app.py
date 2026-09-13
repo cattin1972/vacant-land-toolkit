@@ -139,6 +139,17 @@ def api_search():
         owner = v.get_current_owner_info(r["raw"].get("salesHistory") or [])
         mailing = v.get_owner_mailing_address(r["raw"])
         loc = r["raw"].get("propertyLocation") or {}
+        result_city = loc.get("city") or city or ""
+        result_state = loc.get("state") or state
+
+        # Instant priority: free, itemized ranking signal computed purely
+        # from data Realie's own search response already includes -- see
+        # build_instant_priority's own docstring for why this exists as a
+        # separate, much cheaper first pass ahead of the decision engine's
+        # slower per-parcel evidence screening (built for /api/parcel/
+        # <apn>/report and /api/parcel/score/bulk).
+        priority = v.build_instant_priority(r["tax_flags"], owner, mailing, result_city, result_state)
+
         out.append({
             "apn": r["apn"],
             "lat": r["lat"],
@@ -151,17 +162,22 @@ def api_search():
             # get_owner_mailing_address's docstring): a vacant lot is often
             # not a deliverable mailing address at all.
             "address": loc.get("addressLine1") or loc.get("street") or "",
-            "city": loc.get("city") or city or "",
-            "state": loc.get("state") or state,
+            "city": result_city,
+            "state": result_state,
             "zip_code": loc.get("zipCode") or "",
             "owner_name": owner.get("owner_name"),
             "owner_type": owner.get("owner_type"),
+            "ownership_years": owner.get("ownership_years"),
+            "price_paid": owner.get("price_paid"),
             # The OWNER's actual mailing address -- this, not the property
             # address above, is what a direct-mail piece should go to.
             "mail_street": mailing.get("mail_street"),
             "mail_city": mailing.get("mail_city"),
             "mail_state": mailing.get("mail_state"),
             "mail_zip": mailing.get("mail_zip"),
+            "instant_score": priority["instant_score"],
+            "instant_reasons": priority["reasons"],
+            "instant_negative_reasons": priority["negative_reasons"],
             # Skip tracing isn't wired in yet (waiting on a provider API
             # key) -- these two columns are placeholders so the export/
             # print feature already has the right shape and doesn't need
@@ -174,6 +190,15 @@ def api_search():
             # module-level note above for why.
             "raw": r["raw"],
         })
+
+    # Sort so the parcels most worth a customer's time come first. This is
+    # about ORDER, not filtering -- every parcel Realie returned is still
+    # here, nothing is dropped. Instant score is the only signal available
+    # at this point (the decision engine's deeper screening hasn't run
+    # yet); once a customer deep-screens a subset, the frontend re-sorts
+    # by the combined priority (see PRIORITY_RANK in index.html).
+    out.sort(key=lambda x: x["instant_score"], reverse=True)
+
     return jsonify({"count": len(out), "results": out})
 
 
@@ -303,6 +328,14 @@ def api_score_bulk():
             "deal_potential": decision.get("deal_potential"),
             "color": decision.get("color"),
             "headline": decision.get("headline"),
+            "recommended_action": decision.get("recommended_action"),
+            # Trimmed to the top couple of each -- enough for the Priority
+            # Picks panel to show WHY a parcel ranked where it did without
+            # bloating a 20-parcel bulk response; "Show full evidence
+            # report" on the parcel's own page still has everything.
+            "top_positive_factors": (decision.get("top_positive_factors") or [])[:2],
+            "deal_killer_risks": (decision.get("deal_killer_risks") or [])[:2],
+            "top_risks": (decision.get("top_risks") or [])[:2],
         }
 
     results = []

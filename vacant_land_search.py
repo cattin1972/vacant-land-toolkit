@@ -1400,6 +1400,99 @@ def get_owner_mailing_address(record: dict) -> dict:
     }
 
 
+# --------------------------------------------------------------------------
+# Instant priority signal -- ranks EVERY search result the moment a search
+# comes back, using only fields Realie's own search response already
+# includes (tax/lien flags, sale history, owner mailing address vs. the
+# property's own address). Zero extra network calls, zero extra Realie
+# tokens, works instantly across a 500-parcel result set. Deliberately
+# separate from, and far cheaper than, the decision engine's evidence-based
+# screening (build_decision_summary), which needs a slow per-parcel
+# government-data lookup -- "of 500 parcels, which ones deserve a closer
+# look" has to be answerable BEFORE spending 10-20 seconds of API calls on
+# every single one. This is the FIRST, free ranking pass; the decision
+# engine is the SECOND, deeper pass run only on the shortlist this produces.
+#
+# Every point below is tied to one named, itemized, real land-investing
+# heuristic -- never a bare number a customer has to take on faith:
+#   - Tax lien / foreclosure flags: a concrete, county-recorded distress
+#     signal straight from Realie's own data.
+#   - Absentee ownership (owner's mailing address in a different city/
+#     state than the property itself): a well-established motivated-
+#     seller proxy -- an owner who doesn't live near the parcel is more
+#     likely to have forgotten it, inherited it, or want an easy exit.
+#   - Long ownership tenure: a parcel held 10-20+ years is more often
+#     low-basis, forgotten, or aging into an estate/heir situation --
+#     classically more negotiable than a recent purchase.
+#   - Individual vs. corporate/entity ownership: an individual owner is
+#     typically far easier to reach and negotiate with directly than an
+#     LLC, trust, bank, or government entity.
+# --------------------------------------------------------------------------
+
+def build_instant_priority(tax_flags: dict, current_owner: dict, owner_mailing: dict,
+                            property_city: str | None, property_state: str | None) -> dict:
+    """
+    Returns:
+        {
+            "instant_score": int,             # sum of the itemized points below
+            "reasons": [str, ...],             # positive signals found, most valuable first
+            "negative_reasons": [str, ...],    # why this parcel DIDN'T score higher
+        }
+    """
+    score = 0
+    reasons: list[str] = []
+    negatives: list[str] = []
+
+    if tax_flags and tax_flags.get("flagged"):
+        lien_ct = tax_flags.get("lien_count") or 0
+        fc_ct = tax_flags.get("foreclosure_count") or 0
+        if lien_ct:
+            score += 25
+            reasons.append(f"Tax lien on file ({lien_ct}) -- a concrete, county-recorded distress signal.")
+        if fc_ct:
+            score += 20
+            reasons.append(f"Foreclosure history on file ({fc_ct} record(s)).")
+    else:
+        negatives.append("No tax lien or foreclosure record found for this owner in Realie's data.")
+
+    mail_city = (owner_mailing or {}).get("mail_city")
+    mail_state = (owner_mailing or {}).get("mail_state")
+    if mail_state and property_state and mail_state.upper() != property_state.upper():
+        score += 15
+        reasons.append(
+            f"Owner's mailing address is out of state ({mail_state}, property is in {property_state}) "
+            f"-- a classic absentee-owner signal."
+        )
+    elif mail_city and property_city and mail_city.upper() != property_city.upper():
+        score += 8
+        reasons.append(f"Owner's mailing address ({mail_city}) is a different city than the property ({property_city}).")
+    elif mail_city and property_city:
+        negatives.append("Owner's mailing address matches the property's own city/state -- no absentee-owner signal found.")
+
+    years = (current_owner or {}).get("ownership_years")
+    if isinstance(years, (int, float)):
+        if years >= 20:
+            score += 15
+            reasons.append(f"Held {years:.0f}+ years -- long-tenure owners are more often low-basis, forgotten, or aging into an estate situation.")
+        elif years >= 10:
+            score += 10
+            reasons.append(f"Held {years:.0f} years -- a longer-tenure owner is generally more negotiable than a recent buyer.")
+        elif years < 2:
+            negatives.append(f"Purchased recently ({years:.1f} years ago) -- a recent buyer is typically less motivated to sell.")
+
+    owner_type = (current_owner or {}).get("owner_type")
+    if owner_type == "individual":
+        score += 10
+        reasons.append("Owned by an individual, not a company or entity -- typically easier to reach and negotiate with directly.")
+    elif owner_type == "corporate":
+        negatives.append("Owned by a company, trust, or other entity -- often slower or harder to reach directly than an individual.")
+
+    if not reasons:
+        negatives.append("No distress, absentee-ownership, or long-tenure signals found in the data available at search time.")
+
+    return {"instant_score": score, "reasons": reasons, "negative_reasons": negatives}
+
+
 def count_new_homes_built_realie(
     state: str,
     months_back: int,
