@@ -1075,22 +1075,54 @@ function renderComps(container, listingLinks) {
   container.appendChild(row);
 }
 
-async function loadParcelDetail(rk) {
+// In-memory cache of full parcel reports, keyed by rowKey -- NOT
+// localStorage, and NOT server-side (that would reintroduce the exact
+// cross-customer shared-state risk this app was rebuilt to eliminate;
+// see app.py's own module-level note on that). This is purely "don't
+// re-run ~12 free government API calls again for zero new information
+// if you reopen the same parcel twice in one browser tab." Found during
+// the 2026-09-14 external-data-source audit as a real, currently-
+// unaddressed cost/rate-limit concern (see the audit's economics
+// section). Resets on page reload -- a deliberate choice, not a bug:
+// government data can change, and a fresh page load is a reasonable
+// point to allow a fresh answer.
+const parcelReportCache = new Map();
+
+async function loadParcelDetail(rk, forceRefresh) {
   const r = currentResults.find(x => rowKey(x) === rk);
   const detailEl = document.getElementById('detail');
   if (!r) { detailEl.textContent = 'Parcel not found in current results.'; return; }
-  detailEl.textContent = 'Loading full evidence report...';
-  const resp = await fetch(`/api/parcel/${encodeURIComponent(r.apn)}/report`, {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({raw: r.raw, acres: r.acres}),
-  });
-  const data = await resp.json();
+
+  let data = !forceRefresh && parcelReportCache.get(rk);
+  const fromCache = !!data;
+  if (!data) {
+    detailEl.textContent = 'Loading full evidence report...';
+    const resp = await fetch(`/api/parcel/${encodeURIComponent(r.apn)}/report`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({raw: r.raw, acres: r.acres}),
+    });
+    data = await resp.json();
+    if (!data.error) parcelReportCache.set(rk, data);
+  }
   detailEl.innerHTML = '';
   if (data.error) { detailEl.textContent = 'Error: ' + data.error; return; }
 
   detailEl.appendChild(el('div', {className: 'disclaimer-banner', text:
     'Screening result only -- not a substitute for title, survey, county, engineering, environmental, septic, or zoning verification by a licensed professional.'}));
   detailEl.appendChild(el('h3', {text: `APN: ${data.apn}`}));
+
+  if (fromCache) {
+    const cacheNote = el('div', {className: 'level-toggle', text: 'Showing a cached report from earlier this session -- Refresh for current data'});
+    cacheNote.style.color = '#666';
+    cacheNote.style.textDecoration = 'none';
+    const refreshLink = el('span', {className: 'level-toggle', text: 'Refresh'});
+    refreshLink.style.marginLeft = '6px';
+    refreshLink.onclick = () => loadParcelDetail(rk, true);
+    const row = el('div');
+    row.appendChild(cacheNote);
+    row.appendChild(refreshLink);
+    detailEl.appendChild(row);
+  }
 
   const owner = data.current_owner || {};
   if (owner.owner_name) {
