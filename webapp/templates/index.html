@@ -1883,10 +1883,25 @@ if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js').catch((e) => console.warn('Service worker registration failed:', e));
   });
-  let reloadedForNewWorker = false;
+  // Real bug found and fixed 2026-09-14 (surfaced by an automated test,
+  // not manually): `controllerchange` fires not only when a genuinely
+  // NEWER service worker takes over from an older one, but ALSO the
+  // very first time `clients.claim()` finishes on a brand-new visitor's
+  // FIRST-EVER page load (there's no old page to be "stuck on" yet).
+  // Without this guard, every single first-time visitor got an
+  // unexpected, invisible extra page reload moments after their very
+  // first load -- harmless in effect (nothing was lost), but a real,
+  // unintended reload nonetheless, and exactly the kind of thing that
+  // could interrupt someone who started typing before it fired.
+  // Recording whether a controller ALREADY existed at load time is what
+  // distinguishes the two cases: only a controller that existed already
+  // and then changed represents an actual update to reload for.
+  let hadControllerAtLoad = !!navigator.serviceWorker.controller;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (reloadedForNewWorker) return;
-    reloadedForNewWorker = true;
+    if (!hadControllerAtLoad) {
+      hadControllerAtLoad = true;
+      return;
+    }
     window.location.reload();
   });
 }
