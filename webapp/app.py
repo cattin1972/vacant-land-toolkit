@@ -156,12 +156,22 @@ def api_search():
     city = (data.get("city") or "").strip() or None
     min_acres = data.get("min_acres") or None
     max_acres = data.get("max_acres") or None
-    api_key = (data.get("api_key") or os.environ.get("REALIE_API_KEY") or "").strip()
+    # Deliberately NOT falling back to a server-side REALIE_API_KEY env
+    # var (removed 2026-09-14, per explicit instruction: "I do not want
+    # my own Realie tokens being spent in that way"). That fallback was
+    # a real, flagged financial-exposure risk -- every visitor who
+    # didn't paste in their own key would silently draw down the
+    # operator's own free-tier allowance (or a paid plan the operator
+    # personally pays for), with no per-visitor isolation or spend
+    # visibility. Every search now requires the CALLER's own key, full
+    # stop -- same bring-your-own-key discipline already used for
+    # skip tracing, and for the same reason.
+    api_key = (data.get("api_key") or "").strip()
 
     if not state:
         return jsonify({"error": "State is required."}), 400
     if not api_key:
-        return jsonify({"error": "No Realie API key set (env var REALIE_API_KEY, or paste one in)."}), 400
+        return jsonify({"error": "A Realie API key is required -- paste your own key in above. Get a free one at https://www.realie.ai/."}), 400
 
     try:
         results = v.search_vacant_land_realie(
