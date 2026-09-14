@@ -2,268 +2,699 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Vacant Land Toolkit -- Prototype</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Vacant Land Toolkit</title>
+<meta name="theme-color" content="#1F3A5C">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/static/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
 <style>
-  * { box-sizing: border-box; }
-  body { margin: 0; font-family: system-ui, sans-serif; display: flex; height: 100vh; }
-  #sidebar { width: 380px; padding: 16px; overflow-y: auto; border-right: 1px solid #ccc; }
-  #map { flex: 1; }
-  h1 { font-size: 18px; margin: 0 0 12px; }
-  h2 { font-size: 14px; margin: 16px 0 8px; border-top: 1px solid #ddd; padding-top: 12px; }
-  label { display: block; font-size: 12px; margin-top: 8px; color: #444; }
-  input, select { width: 100%; padding: 5px; margin-top: 2px; font-size: 13px; }
-  button { margin-top: 10px; width: 100%; padding: 8px; cursor: pointer; }
-  .result-item { padding: 6px; border-bottom: 1px solid #eee; cursor: pointer; font-size: 12px; }
-  .result-item:hover { background: #f5f5f5; }
-  .flagged { color: #b00; font-weight: bold; }
-  #detail { font-size: 12px; }
-  .concern { color: #b00; margin: 2px 0; }
-  #status { font-size: 12px; color: #666; min-height: 16px; }
-  .heat-toggle { display: flex; gap: 6px; margin-top: 6px; }
-  .heat-toggle button { flex: 1; font-size: 11px; padding: 5px; }
-  .heat-toggle button.active { background: #333; color: #fff; }
+/* ==========================================================================
+   Design tokens -- a restrained, professional data-platform palette.
+   Deliberately NOT the bright primary-color / purple-gradient look common
+   to AI-demo UIs: warm near-white paper, one deep navy brand color used
+   sparingly, and the same 4 semantic colors (green/amber/red/gray) that
+   already carry real meaning throughout the evidence framework, refined
+   to a less saturated, more premium register rather than browser-default
+   red/green/yellow.
+   ========================================================================== */
+:root {
+  --paper: #F5F6F3;
+  --surface: #FFFFFF;
+  --surface-muted: #EEF0EA;
+  --border: #DBDED4;
+  --border-strong: #C2C6B9;
+  --ink: #1B211C;
+  --ink-soft: #4B5148;
+  --ink-faint: #767C70;
+  --brand: #1F3A5C;
+  --brand-hover: #16293F;
+  --brand-soft: #E7ECF1;
+  --focus-ring: #3E7FBF;
 
-  /* Evidence report UI */
-  .verdict-banner { padding: 10px 12px; border-radius: 4px; margin-bottom: 10px; border: 1px solid; }
-  .verdict-banner.promising { background: #e8f5e9; border-color: #4caf50; }
-  .verdict-banner.mixed { background: #fff8e1; border-color: #d4a017; }
-  .verdict-banner.concerns { background: #fdecea; border-color: #c0392b; }
-  .verdict-banner.insufficient { background: #eceff1; border-color: #78909c; }
-  .verdict-title { font-weight: bold; font-size: 13px; margin-bottom: 3px; }
-  .verdict-explain { font-size: 11.5px; color: #444; }
+  --good: #1F7A4D;      --good-bg: #E4F3EA;      --good-border: #B9DDC5;
+  --warn: #8A6200;      --warn-bg: #FBF2DC;      --warn-border: #E7CE8C;
+  --bad:  #A63C34;      --bad-bg:  #FBEAE8;      --bad-border: #E9B9B3;
+  --unknown: #62685F;   --unknown-bg: #EEF0EA;   --unknown-border: #D3D7C9;
 
-  .bucket-row { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
-  .bucket-chip { font-size: 10px; padding: 2px 6px; border-radius: 3px; border: 1px solid #ccc; background: #f5f5f5; cursor: pointer; }
-  .bucket-chip:hover { background: #e8e8e8; }
+  --radius-sm: 5px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --shadow-1: 0 1px 2px rgba(20,25,18,0.06);
+  --shadow-2: 0 2px 4px rgba(20,25,18,0.06), 0 8px 20px rgba(20,25,18,0.07);
+  --font-ui: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
 
-  .finding-card { border: 1px solid #ddd; border-left: 4px solid #999; border-radius: 3px; padding: 8px 10px; margin-bottom: 8px; }
-  .finding-card.status-CLEAR { border-left-color: #4caf50; }
-  .finding-card.status-CAUTION { border-left-color: #d4a017; }
-  .finding-card.status-CONCERN { border-left-color: #c0392b; }
-  .finding-card.status-UNKNOWN { border-left-color: #78909c; }
-  .finding-title-row { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; flex-wrap: wrap; }
-  .finding-category { font-weight: bold; font-size: 12.5px; }
-  .status-badge { font-size: 9.5px; font-weight: bold; padding: 1px 6px; border-radius: 8px; color: #fff; white-space: nowrap; }
-  .status-badge.status-CLEAR { background: #4caf50; }
-  .status-badge.status-CAUTION { background: #d4a017; }
-  .status-badge.status-CONCERN { background: #c0392b; }
-  .status-badge.status-UNKNOWN { background: #78909c; }
-  .evidence-badge { font-size: 9px; color: #666; border: 1px solid #ccc; border-radius: 8px; padding: 1px 6px; white-space: nowrap; }
-  .quick-label-badge { font-size: 9px; font-weight: bold; letter-spacing: 0.02em; color: #5a4300; background: #fff3cd; border: 1px solid #d4a017; border-radius: 8px; padding: 1px 6px; white-space: nowrap; }
-  .finding-row { font-size: 11px; margin-top: 4px; line-height: 1.4; }
-  .finding-row b { color: #333; }
-  .finding-row.limitation { color: #a05a00; }
-  .finding-row.next-step { color: #145a99; }
-  .finding-toggle { font-size: 10px; color: #666; cursor: pointer; text-decoration: underline; margin-top: 4px; display: inline-block; }
-  .finding-detail { display: none; margin-top: 4px; }
-  .finding-detail.open { display: block; }
-  .raw-toggle { font-size: 11px; color: #666; cursor: pointer; text-decoration: underline; margin: 10px 0 4px; display: inline-block; }
-  #detail-raw { display: none; white-space: pre-wrap; font-size: 11px; background: #f7f7f7; padding: 8px; border-radius: 3px; }
-  #detail-raw.open { display: block; }
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  font-family: var(--font-ui);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 14.5px;
+  line-height: 1.5;
+}
+h1, h2, h3, h4 { font-family: var(--font-ui); margin: 0; color: var(--ink); }
+p { margin: 0 0 8px; }
+a { color: var(--brand); }
+button, input, select, textarea { font-family: inherit; font-size: inherit; }
+.mono { font-family: var(--font-mono); }
 
-  /* Deal-potential decision engine UI -- same 4 semantic colors used
-     throughout the evidence report (green/yellow/red/gray), applied here
-     as a coarser, faster-to-scan signal. */
-  .deal-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; flex-shrink: 0; border: 1px solid rgba(0,0,0,0.15); }
-  .deal-dot.GREEN { background: #4caf50; }
-  .deal-dot.YELLOW { background: #d4a017; }
-  .deal-dot.RED { background: #c0392b; }
-  .deal-dot.GRAY, .deal-dot.unscored { background: #ccc; }
-  .result-item { display: flex; align-items: center; }
-  .result-main { flex: 1; min-width: 0; }
-  .deal-tier-label { font-weight: bold; }
-  .deal-tier-label.GREEN { color: #2e7d32; }
-  .deal-tier-label.YELLOW { color: #9c6f00; }
-  .deal-tier-label.RED { color: #a52a1f; }
-  .deal-tier-label.GRAY { color: #666; }
+.skip-link {
+  position: absolute; left: -9999px; top: 0; z-index: 200;
+  background: var(--brand); color: #fff; padding: 10px 16px; border-radius: 0 0 var(--radius-sm) 0;
+}
+.skip-link:focus { left: 0; }
 
-  .decision-banner { padding: 12px 14px; border-radius: 4px; margin-bottom: 10px; border: 1px solid; }
-  .decision-banner.GREEN { background: #e8f5e9; border-color: #4caf50; }
-  .decision-banner.YELLOW { background: #fff8e1; border-color: #d4a017; }
-  .decision-banner.RED { background: #fdecea; border-color: #c0392b; }
-  .decision-banner.GRAY { background: #eceff1; border-color: #78909c; }
-  .decision-tier { font-size: 15px; font-weight: bold; margin-bottom: 4px; }
-  .decision-headline { font-size: 11px; color: #555; margin-bottom: 8px; }
-  .decision-action { font-size: 12px; font-style: italic; }
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
 
-  .decision-list-title { font-size: 11.5px; font-weight: bold; margin: 8px 0 3px; }
-  .decision-list { margin: 0 0 6px; padding-left: 16px; font-size: 11.5px; line-height: 1.5; }
-  .decision-list.positive li { color: #2e7d32; }
-  .decision-list.risk li { color: #9c6f00; }
-  .decision-list.killer li { color: #a52a1f; }
-  .decision-list.unknown li { color: #666; }
+/* -------------------------------------------------------------------- */
+/* Top bar                                                                */
+/* -------------------------------------------------------------------- */
+.topbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 12px 20px; background: var(--brand); color: #fff;
+  border-bottom: 1px solid var(--brand-hover);
+}
+.topbar-brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.brand-mark {
+  width: 30px; height: 30px; border-radius: var(--radius-sm); background: rgba(255,255,255,0.14);
+  display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; flex-shrink: 0;
+}
+.brand-text { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
+.brand-name { font-weight: 600; font-size: 15px; }
+.brand-tag { font-size: 11.5px; color: rgba(255,255,255,0.72); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.topbar-disclaimer {
+  font-size: 11.5px; color: rgba(255,255,255,0.78); text-align: right; max-width: 420px;
+  display: none;
+}
+@media (min-width: 860px) { .topbar-disclaimer { display: block; } }
 
-  .level-toggle { font-size: 11px; color: #145a99; cursor: pointer; text-decoration: underline; margin: 6px 0; display: inline-block; }
-  .level-section { display: none; }
-  .level-section.open { display: block; }
+/* -------------------------------------------------------------------- */
+/* Overall shell: side panel + workspace + detail drawer                 */
+/* -------------------------------------------------------------------- */
+.shell {
+  display: flex;
+  height: calc(100vh - 54px);
+  position: relative;
+  overflow: hidden;
+}
+.panel {
+  width: 320px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--border);
+  overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 4px;
+}
+.panel-section { padding-bottom: 14px; margin-bottom: 14px; border-bottom: 1px solid var(--border); }
+.panel-section:last-child { border-bottom: none; margin-bottom: 0; }
+.panel-title {
+  font-size: 11.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--ink-faint); margin: 0 0 10px; display: flex; align-items: center; gap: 6px;
+  cursor: default; list-style: none;
+}
+summary.panel-title { cursor: pointer; }
+summary.panel-title::-webkit-details-marker { display: none; }
+summary.panel-title::before { content: '▸'; font-size: 10px; color: var(--ink-faint); transition: transform 120ms ease; }
+details[open] > summary.panel-title::before { transform: rotate(90deg); }
+.panel-hint { font-size: 12px; color: var(--ink-faint); margin: -4px 0 10px; line-height: 1.45; }
 
-  /* Screening: filters + Priority Picks */
-  .filter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; align-items: end; }
-  .filter-grid label { margin-top: 6px; }
-  .filter-check { display: flex; align-items: center; gap: 5px; font-size: 12px; margin-top: 6px; color: #333; }
-  .filter-check input { width: auto; margin: 0; }
-  #filter-status { font-size: 11px; color: #666; margin: 4px 0; }
-  .clear-filters { font-size: 11px; color: #145a99; cursor: pointer; text-decoration: underline; background: none; border: none; padding: 0; width: auto; margin-top: 4px; }
+.field { margin-bottom: 10px; }
+.field label { display: block; font-size: 12px; font-weight: 500; color: var(--ink-soft); margin-bottom: 4px; }
+.field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+input[type="text"], input[type="number"], input[type="password"], input:not([type]), select {
+  width: 100%; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--ink); transition: border-color 120ms ease;
+}
+input:focus, select:focus { border-color: var(--brand); }
+.checkline { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink-soft); margin: 8px 0; }
+.checkline input[type="checkbox"] { width: auto; margin: 0; accent-color: var(--brand); }
 
-  .pick-section-title { font-size: 12px; font-weight: bold; margin: 12px 0 4px; }
-  .pick-section-hint { font-size: 10.5px; color: #777; margin: -2px 0 6px; }
-  .pick-row { display: flex; align-items: flex-start; gap: 6px; padding: 6px; border: 1px solid #e2e2e2; border-radius: 4px; margin-bottom: 5px; cursor: pointer; }
-  .pick-row:hover { background: #f7f7f7; }
-  .pick-row .deal-dot { margin-top: 2px; }
-  .pick-main { flex: 1; min-width: 0; }
-  .pick-title { font-size: 12px; font-weight: bold; }
-  .pick-reason { font-size: 10.5px; color: #2e7d32; margin-top: 2px; line-height: 1.35; }
-  .pick-reason.negative { color: #a52a1f; }
-  .pick-reason.note { color: #9c6f00; font-style: italic; }
+button { cursor: pointer; }
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 9px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border-strong);
+  background: var(--surface); color: var(--ink); font-weight: 600; font-size: 13px;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.btn:hover { background: var(--surface-muted); }
+.btn.btn-block { width: 100%; }
+.btn-primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+.btn-primary:hover { background: var(--brand-hover); }
+.btn-primary:disabled { opacity: 0.55; cursor: not-allowed; }
+.btn-ghost { border-color: transparent; background: transparent; color: var(--brand); font-weight: 500; padding: 6px 8px; }
+.btn-ghost:hover { background: var(--brand-soft); }
+.btn-sm { padding: 4px 9px; font-size: 11.5px; }
+.btn-danger-outline { border-color: var(--bad-border); color: var(--bad); background: var(--bad-bg); }
 
-  /* Workflow-stage organization + wholesaler tools */
-  .stage-label { display: inline-block; font-size: 9.5px; font-weight: bold; letter-spacing: 0.03em; color: #145a99; background: #e8f1fb; border-radius: 3px; padding: 1px 6px; margin-bottom: 3px; }
-  .disclaimer-banner { font-size: 10.5px; color: #5a4300; background: #fff8e1; border: 1px solid #d4a017; border-radius: 4px; padding: 6px 8px; margin: 6px 0; line-height: 1.4; }
-  .buyer-fit-row { display: flex; flex-wrap: wrap; gap: 5px; margin: 6px 0; }
-  .buyer-fit-tag { font-size: 10.5px; background: #eef4ff; border: 1px solid #b9d0f0; color: #1a4a8a; border-radius: 10px; padding: 2px 8px; cursor: default; }
-  .outreach-box { border: 1px solid #ddd; border-radius: 4px; padding: 8px 10px; margin: 8px 0; background: #fafafa; }
-  .outreach-box h4 { margin: 0 0 4px; font-size: 12px; }
-  .outreach-list { margin: 2px 0 6px; padding-left: 16px; font-size: 11.5px; line-height: 1.5; }
-  .checklist-item { display: flex; align-items: flex-start; gap: 6px; font-size: 11.5px; margin: 3px 0; line-height: 1.4; }
-  .checklist-item input { width: auto; margin: 2px 0 0; }
-  .comps-links { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
-  .comps-links a { font-size: 11px; color: #145a99; }
-  .copy-btn { width: auto; font-size: 10.5px; padding: 3px 8px; margin: 4px 0 0; }
+.status-line { font-size: 12.5px; color: var(--ink-faint); min-height: 18px; margin-top: 8px; line-height: 1.4; }
+.status-line.is-error { color: var(--bad); font-weight: 500; }
+.status-line.is-busy { color: var(--brand); }
+
+.spinner {
+  display: inline-block; width: 13px; height: 13px; border-radius: 50%;
+  border: 2px solid var(--border-strong); border-top-color: var(--brand);
+  animation: spin 700ms linear infinite; vertical-align: -2px; margin-right: 6px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 1400ms; } }
+
+/* -------------------------------------------------------------------- */
+/* Workspace: toolbar + results/map                                      */
+/* -------------------------------------------------------------------- */
+.workspace { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.workspace-toolbar {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--border);
+}
+.result-count-line { font-weight: 600; font-size: 13.5px; color: var(--ink); white-space: nowrap; }
+.toolbar-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+.toolbar-actions-secondary { display: contents; }
+.toolbar-note { width: 100%; font-size: 12px; color: var(--ink-faint); padding: 0 16px; }
+
+/* -------------------------------------------------------------------- */
+/* Mobile-only chrome -- hidden on desktop by default, turned on inside   */
+/* the max-width:899px block below. Kept as real elements (not just CSS  */
+/* on existing ones) since mobile navigation here is a genuinely         */
+/* different structure (bottom tab bar + a full-screen search overlay),  */
+/* not the desktop sidebar squeezed smaller.                             */
+/* -------------------------------------------------------------------- */
+.panel-mobile-header { display: none; }
+.mobile-bottom-nav { display: none; }
+
+.workspace-body { flex: 1; display: flex; min-height: 0; }
+.results-pane { width: 380px; flex-shrink: 0; border-right: 1px solid var(--border); overflow-y: auto; padding: 14px; background: var(--paper); }
+.map-pane { flex: 1; position: relative; min-width: 0; }
+#map { position: absolute; inset: 0; }
+
+.map-overlay-controls {
+  position: absolute; top: 10px; right: 10px; z-index: 500; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow-2);
+  padding: 6px; display: flex; gap: 4px;
+}
+.map-overlay-controls .btn-sm { border-color: transparent; }
+.map-overlay-controls .btn-sm.active { background: var(--brand); border-color: var(--brand); color: #fff; }
+
+/* -------------------------------------------------------------------- */
+/* Priority Picks + Results list (cards)                                 */
+/* -------------------------------------------------------------------- */
+.section-heading { font-size: 12px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; color: var(--ink-faint); margin: 4px 0 8px; }
+.priority-picks { margin-bottom: 6px; }
+.pick-block + .pick-block { margin-top: 14px; }
+.pick-block-title { font-size: 12.5px; font-weight: 700; color: var(--ink); margin-bottom: 2px; }
+.pick-block-hint { font-size: 11.5px; color: var(--ink-faint); margin-bottom: 8px; }
+
+.pick-row, .result-card {
+  display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; margin-bottom: 6px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md);
+  cursor: pointer; transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.pick-row:hover, .result-card:hover { border-color: var(--border-strong); box-shadow: var(--shadow-1); }
+.pick-row:focus-visible, .result-card:focus-visible { border-color: var(--brand); }
+
+.tier-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; margin-top: 4px; border: 1px solid rgba(0,0,0,0.12); }
+.tier-dot.GREEN { background: var(--good); }
+.tier-dot.YELLOW { background: var(--warn); }
+.tier-dot.RED { background: var(--bad); }
+.tier-dot.GRAY, .tier-dot.unscored { background: #C7CBBF; }
+
+.card-main { flex: 1; min-width: 0; }
+.card-title-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.card-apn { font-family: var(--font-mono); font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.card-acres { font-size: 12.5px; color: var(--ink-faint); }
+.tier-label { font-weight: 700; font-size: 12px; letter-spacing: 0.01em; }
+.tier-label.GREEN { color: var(--good); }
+.tier-label.YELLOW { color: var(--warn); }
+.tier-label.RED { color: var(--bad); }
+.tier-label.GRAY { color: var(--unknown); }
+.card-flag { font-size: 10.5px; font-weight: 700; letter-spacing: 0.03em; color: var(--bad); background: var(--bad-bg); border: 1px solid var(--bad-border); border-radius: 4px; padding: 1px 6px; }
+.card-phone { font-size: 12px; color: var(--ink-soft); }
+.card-reason { font-size: 11.5px; margin-top: 3px; line-height: 1.4; color: var(--good); }
+.card-reason.negative { color: var(--bad); }
+.card-reason.note { color: var(--warn); font-style: italic; }
+.card-footer-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+
+.empty-state {
+  text-align: center; padding: 36px 20px; color: var(--ink-faint); font-size: 13px; line-height: 1.6;
+}
+.empty-state strong { display: block; color: var(--ink-soft); font-size: 14.5px; margin-bottom: 4px; }
+.filter-status-line { font-size: 12px; color: var(--ink-faint); margin: 0 0 10px; }
+
+/* -------------------------------------------------------------------- */
+/* Detail drawer                                                          */
+/* -------------------------------------------------------------------- */
+.detail-scrim {
+  display: none; position: fixed; inset: 0; background: rgba(20,25,18,0.28); z-index: 300;
+}
+.detail-scrim.open { display: block; }
+.detail-drawer {
+  position: fixed; top: 0; right: 0; height: 100%; width: min(560px, 100vw);
+  background: var(--surface); box-shadow: var(--shadow-2); z-index: 301;
+  transform: translateX(100%); transition: transform 180ms ease;
+  display: flex; flex-direction: column;
+}
+.detail-drawer.open { transform: translateX(0); }
+@media (prefers-reduced-motion: reduce) { .detail-drawer { transition: none; } }
+.detail-drawer-header {
+  display: flex; align-items: center; justify-content: space-between; padding: 12px 16px;
+  border-bottom: 1px solid var(--border); font-weight: 700; font-size: 13px;
+  color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.03em; flex-shrink: 0;
+}
+.detail-close { border: none; background: transparent; font-size: 22px; line-height: 1; color: var(--ink-faint); padding: 4px 8px; border-radius: var(--radius-sm); }
+.detail-close:hover { background: var(--surface-muted); color: var(--ink); }
+.detail-body { flex: 1; overflow-y: auto; padding: 18px; font-size: 13.5px; }
+
+/* -------------------------------------------------------------------- */
+/* Opportunity hero card (Level 1 + 2: the answer, then why)             */
+/* -------------------------------------------------------------------- */
+.disclaimer-banner {
+  font-size: 11.5px; color: var(--warn); background: var(--warn-bg); border: 1px solid var(--warn-border);
+  border-radius: var(--radius-sm); padding: 8px 10px; margin: 0 0 14px; line-height: 1.45;
+}
+.parcel-apn-line { font-family: var(--font-mono); font-size: 12px; color: var(--ink-faint); margin-bottom: 12px; }
+
+.opportunity-card {
+  border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; margin-bottom: 16px; box-shadow: var(--shadow-1);
+}
+.opportunity-head { padding: 16px 18px; border-bottom: 1px solid rgba(0,0,0,0.06); }
+.opportunity-head.GREEN { background: var(--good-bg); }
+.opportunity-head.YELLOW { background: var(--warn-bg); }
+.opportunity-head.RED { background: var(--bad-bg); }
+.opportunity-head.GRAY { background: var(--unknown-bg); }
+.opportunity-eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; opacity: 0.75; margin-bottom: 4px; }
+.opportunity-tier { font-size: 22px; font-weight: 700; line-height: 1.15; }
+.opportunity-head.GREEN .opportunity-eyebrow, .opportunity-head.GREEN .opportunity-tier { color: var(--good); }
+.opportunity-head.YELLOW .opportunity-eyebrow, .opportunity-head.YELLOW .opportunity-tier { color: var(--warn); }
+.opportunity-head.RED .opportunity-eyebrow, .opportunity-head.RED .opportunity-tier { color: var(--bad); }
+.opportunity-head.GRAY .opportunity-eyebrow, .opportunity-head.GRAY .opportunity-tier { color: var(--unknown); }
+.opportunity-headline { font-size: 12.5px; color: var(--ink-soft); margin-top: 4px; }
+
+.opportunity-action {
+  padding: 12px 18px; background: var(--surface-muted); font-size: 13.5px; font-weight: 500;
+  color: var(--ink); border-bottom: 1px solid var(--border); line-height: 1.5;
+}
+.opportunity-action b { font-weight: 700; color: var(--ink-faint); font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; display: block; margin-bottom: 3px; }
+
+.opportunity-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
+@media (max-width: 480px) { .opportunity-grid { grid-template-columns: 1fr; } }
+.opp-col { padding: 14px 18px; border-top: 1px solid var(--border); }
+.opp-col:nth-child(odd) { border-right: 1px solid var(--border); }
+@media (max-width: 480px) { .opp-col:nth-child(odd) { border-right: none; } }
+.opp-col-title { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+.opp-col-title.positives { color: var(--good); }
+.opp-col-title.risks { color: var(--warn); }
+.opp-col-title.killers { color: var(--bad); }
+.opp-col-title.unknowns { color: var(--unknown); }
+.opp-list { list-style: none; margin: 0; padding: 0; font-size: 12.5px; line-height: 1.5; }
+.opp-list li { padding-left: 14px; position: relative; margin-bottom: 6px; color: var(--ink-soft); }
+.opp-list li::before { content: '–'; position: absolute; left: 0; color: var(--ink-faint); }
+.opp-empty { font-size: 12px; color: var(--ink-faint); font-style: italic; }
+
+/* -------------------------------------------------------------------- */
+/* Secondary Level-2 cards: buyer fit / outreach / due diligence / comps  */
+/* -------------------------------------------------------------------- */
+.stage-label {
+  display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+  color: var(--brand); background: var(--brand-soft); border-radius: 4px; padding: 2px 7px; margin-bottom: 8px;
+}
+.sub-card { border: 1px solid var(--border); border-radius: var(--radius-md); padding: 14px 16px; margin-bottom: 14px; background: var(--surface); }
+.sub-card h4 { font-size: 13.5px; margin-bottom: 8px; }
+.sub-card-row { font-size: 12.5px; color: var(--ink-soft); margin-bottom: 6px; line-height: 1.5; }
+.sub-card-row.note { color: var(--warn); }
+.sub-card-list-title { font-size: 11.5px; font-weight: 700; color: var(--ink-faint); margin: 10px 0 4px; }
+.sub-card-list { margin: 0 0 4px; padding-left: 18px; font-size: 12.5px; line-height: 1.55; color: var(--ink-soft); }
+.buyer-fit-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.buyer-fit-tag { font-size: 11.5px; background: var(--brand-soft); border: 1px solid var(--border); color: var(--brand); border-radius: 20px; padding: 3px 10px; }
+.checklist-item { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; margin: 6px 0; line-height: 1.45; color: var(--ink-soft); }
+.checklist-item input { width: auto; margin: 3px 0 0; accent-color: var(--brand); }
+.comps-links { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.comps-links a { font-size: 12.5px; font-weight: 500; }
+
+/* -------------------------------------------------------------------- */
+/* Level 3 / 4: full evidence report + raw data (collapsed by default)   */
+/* -------------------------------------------------------------------- */
+.level-toggle {
+  font-size: 12px; color: var(--brand); cursor: pointer; font-weight: 600; margin: 6px 0 12px; display: inline-block;
+  background: none; border: none; padding: 0;
+}
+.level-toggle:hover { text-decoration: underline; }
+.level-section { display: none; }
+.level-section.open { display: block; }
+
+.verdict-banner { padding: 12px 14px; border-radius: var(--radius-md); margin-bottom: 14px; border: 1px solid; }
+.verdict-banner.promising { background: var(--good-bg); border-color: var(--good-border); }
+.verdict-banner.mixed { background: var(--warn-bg); border-color: var(--warn-border); }
+.verdict-banner.concerns { background: var(--bad-bg); border-color: var(--bad-border); }
+.verdict-banner.insufficient { background: var(--unknown-bg); border-color: var(--unknown-border); }
+.verdict-title { font-weight: 700; font-size: 13.5px; margin-bottom: 3px; }
+.verdict-explain { font-size: 12px; color: var(--ink-soft); }
+
+.bucket-row { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 12px; }
+.bucket-chip { font-size: 11px; padding: 3px 9px; border-radius: 20px; border: 1px solid var(--border-strong); background: var(--surface-muted); color: var(--ink-soft); }
+
+.finding-card { border: 1px solid var(--border); border-left: 4px solid var(--border-strong); border-radius: var(--radius-sm); padding: 10px 12px; margin-bottom: 8px; }
+.finding-card.status-CLEAR { border-left-color: var(--good); }
+.finding-card.status-CAUTION { border-left-color: var(--warn); }
+.finding-card.status-CONCERN { border-left-color: var(--bad); }
+.finding-card.status-UNKNOWN { border-left-color: var(--unknown); }
+.finding-title-row { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; flex-wrap: wrap; margin-bottom: 4px; }
+.finding-category { font-weight: 700; font-size: 12.5px; }
+.status-badge, .evidence-badge, .quick-label-badge {
+  font-size: 9.5px; font-weight: 700; letter-spacing: 0.02em; padding: 2px 7px; border-radius: 20px; white-space: nowrap;
+}
+.status-badge.status-CLEAR { background: var(--good); color: #fff; }
+.status-badge.status-CAUTION { background: var(--warn); color: #fff; }
+.status-badge.status-CONCERN { background: var(--bad); color: #fff; }
+.status-badge.status-UNKNOWN { background: var(--unknown); color: #fff; }
+.evidence-badge { color: var(--ink-faint); border: 1px solid var(--border-strong); background: var(--surface); }
+.quick-label-badge { color: var(--warn); border: 1px solid var(--warn-border); background: var(--warn-bg); }
+.finding-row { font-size: 12px; margin-top: 5px; line-height: 1.5; color: var(--ink-soft); }
+.finding-row b { color: var(--ink); }
+.finding-row.limitation { color: var(--warn); }
+.finding-row.next-step { color: var(--brand); }
+.finding-toggle { font-size: 11px; color: var(--brand); cursor: pointer; font-weight: 500; margin-top: 6px; display: inline-block; }
+.finding-toggle:hover { text-decoration: underline; }
+.finding-detail { display: none; margin-top: 4px; }
+.finding-detail.open { display: block; }
+.raw-toggle { font-size: 12px; color: var(--ink-faint); cursor: pointer; margin: 14px 0 6px; display: inline-block; }
+#detail-raw { display: none; white-space: pre-wrap; font-family: var(--font-mono); font-size: 11px; background: var(--surface-muted); padding: 10px; border-radius: var(--radius-sm); max-height: 320px; overflow: auto; }
+#detail-raw.open { display: block; }
+
+/* -------------------------------------------------------------------- */
+/* Tax delinquency tool result box                                       */
+/* -------------------------------------------------------------------- */
+#delinquency-result {
+  font-family: var(--font-mono); font-size: 11.5px; white-space: pre-wrap; margin-top: 8px;
+  background: var(--surface-muted); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 10px; max-height: 240px; overflow: auto;
+}
+
+/* -------------------------------------------------------------------- */
+/* Responsive: mobile layout                                              */
+/* Rebuilt 2026-09-14 (mobile UX audit) as a genuinely different mobile   */
+/* structure, not the desktop sidebar+toolbar shrunk down:                */
+/*  - Search moves into its OWN full-screen overlay, opened from a fixed  */
+/*    bottom nav bar -- not a squeezed inline accordion competing for     */
+/*    scroll with the page around it.                                    */
+/*  - Results / Map become the other 2 bottom-nav destinations, replacing */
+/*    the old top view-tabs strip (which only ever existed on mobile      */
+/*    anyway -- see its removal below).                                   */
+/*  - Every tappable control is sized to a real touch target (>=44px      */
+/*    tall), not just a smaller copy of its desktop pixel size.           */
+/*  - Android's back button/gesture closes an open overlay (handled in    */
+/*    JS via history.pushState/popstate) instead of leaving the page.     */
+/* -------------------------------------------------------------------- */
+@media (max-width: 899px) {
+  body { font-size: 15.5px; padding-bottom: calc(56px + env(safe-area-inset-bottom)); }
+  .topbar-brand { min-width: 0; }
+  .shell { flex-direction: column; height: auto; min-height: calc(100vh - 54px); }
+
+  /* Search & Filters becomes a full-screen overlay (see #side-panel.mobile-open
+     below), triggered by the bottom nav's "Search" button -- never an
+     inline accordion capped at a fraction of the screen height. */
+  .panel {
+    display: none; position: fixed; inset: 0; z-index: 260;
+    width: 100%; max-height: none; border: none;
+  }
+  .panel.mobile-open { display: flex; }
+  .panel-mobile-header {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 14px 16px; padding-top: calc(14px + env(safe-area-inset-top));
+    border-bottom: 1px solid var(--border); font-weight: 700; font-size: 16px;
+    position: sticky; top: 0; background: var(--surface); z-index: 1; flex-shrink: 0;
+  }
+
+  .workspace-body { flex-direction: column; }
+  .results-pane { width: 100%; border-right: none; }
+  .map-pane { width: 100%; height: 60vh; }
+  .results-pane, .map-pane { display: none; }
+  .results-pane.active-view, .map-pane.active-view { display: block; }
+  /* More room for the map when it's the active view: the export/print/
+     score row is results-list-specific, not needed while looking at pins. */
+  body.mobile-map-active .toolbar-actions { display: none; }
+
+  .detail-drawer { width: 100vw; }
+
+  /* Toolbar: Score Deal Potential is the one primary, frequent action --
+     kept full-width and reachable; Export CSV / Print list (a "back at
+     my desktop" pair, not a one-thumb action) are grouped into their own
+     smaller secondary row below it instead of 3 equal-width buttons
+     fighting for a ~110px sliver each. */
+  .workspace-toolbar { flex-wrap: wrap; padding: 10px 12px; }
+  .toolbar-actions { width: 100%; margin-left: 0; flex-direction: column; }
+  #score-all-btn { order: 1; width: 100%; min-height: 46px; font-size: 14.5px; }
+  .toolbar-actions-secondary { display: flex; order: 2; width: 100%; gap: 8px; }
+  .toolbar-actions-secondary .btn { flex: 1; min-width: 0; }
+
+  /* Touch targets: every interactive element grows to a real, comfortable
+     tap size here -- this is deliberately NOT just a smaller copy of the
+     desktop control, per the explicit "don't just shrink desktop" brief. */
+  input[type="text"], input[type="number"], input[type="password"], input:not([type]), select {
+    min-height: 46px; font-size: 16px; padding: 11px 12px;
+  }
+  .btn { min-height: 44px; padding: 10px 16px; font-size: 14px; }
+  .btn-sm { min-height: 40px; padding: 9px 13px; font-size: 12.5px; }
+  .btn-ghost { min-height: 44px; padding: 10px 12px; }
+  .checkline { min-height: 44px; padding: 4px 0; gap: 10px; }
+  .checkline input[type="checkbox"] { width: 20px; height: 20px; flex-shrink: 0; }
+  .checklist-item { min-height: 34px; }
+  .checklist-item input { width: 20px; height: 20px; }
+  .detail-close { font-size: 26px; padding: 10px 14px; min-width: 44px; min-height: 44px; }
+  .level-toggle, .finding-toggle, .raw-toggle { display: inline-block; padding: 9px 0; font-size: 13.5px; }
+  .pick-row, .result-card { padding: 13px 14px; }
+  .card-footer-row .btn { min-height: 40px; }
+
+  /* Map overlay controls (heat toggle): bigger and better-spaced so they
+     don't compete with a thumb that's also trying to pan/zoom the map
+     right underneath them. */
+  .map-overlay-controls { padding: 7px; gap: 6px; top: 12px; right: 12px; }
+  .map-overlay-controls .btn-sm { min-height: 40px; padding: 9px 12px; }
+
+  /* Bottom navigation: Search / Results / Map. Fixed and thumb-reachable,
+     the same 3 destinations as the actual workflow (search, review
+     results, check the map), replacing both the old top accordion
+     toggle and the old top List/Map tab strip. */
+  .mobile-bottom-nav {
+    display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 240;
+    background: var(--surface); border-top: 1px solid var(--border);
+    padding-bottom: env(safe-area-inset-bottom);
+    box-shadow: 0 -2px 10px rgba(20,25,18,0.08);
+  }
+  .mobile-nav-btn {
+    flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
+    border: none; background: transparent; color: var(--ink-soft); font-weight: 600;
+    font-size: 13px; padding: 10px 4px; min-height: 56px; position: relative;
+  }
+  .mobile-nav-btn.active { color: var(--brand); }
+  .mobile-nav-btn.active::before {
+    content: ''; position: absolute; top: 0; left: 22%; right: 22%; height: 2px; background: var(--brand);
+  }
+  .mobile-nav-badge {
+    display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px;
+    padding: 0 4px; border-radius: 20px; background: var(--border-strong); color: var(--ink-faint);
+    font-size: 10.5px; font-weight: 700;
+  }
+  .mobile-nav-badge.has-results { background: var(--brand); color: #fff; }
+}
 </style>
 </head>
 <body>
 
-<div id="sidebar">
-  <h1>Vacant Land Toolkit</h1>
-  <div class="disclaimer-banner">
-    Screening &amp; research aid for wholesalers -- not a substitute for title, survey, county,
-    engineering, environmental, septic, or zoning verification by a licensed professional.
-  </div>
+<a href="#main-search" class="skip-link">Skip to search</a>
 
-  <span class="stage-label">1. DISCOVER</span>
-  <h2>Search</h2>
-  <label>State</label>
-  <input id="state" value="FL" maxlength="2">
-  <label>County (optional)</label>
-  <input id="county" value="Lee">
-  <label>City (optional)</label>
-  <input id="city" value="Cape Coral">
-  <label>Min acres</label>
-  <input id="min_acres" type="number" step="0.1">
-  <label>Max acres</label>
-  <input id="max_acres" type="number" step="0.1">
-  <label>Realie API key (your own -- required, billed to your own Realie account)</label>
-  <input id="api_key" type="password" placeholder="paste your Realie key -- get a free one at realie.ai">
-  <button onclick="runSearch()">Search vacant land (1 Realie token)</button>
-  <div id="status"></div>
-
-  <span class="stage-label">2. SCREEN &amp; PRIORITIZE</span>
-  <h2>Filter &amp; sort</h2>
-  <p style="font-size:11px; color:#666; margin:2px 0 6px;">
-    Instant, free, works on results you already have -- no new Realie tokens spent.
-    Nothing is deleted, only reordered/hidden from view.
-  </p>
-  <div class="filter-grid">
-    <div>
-      <label>Min acres</label>
-      <input id="filter-min-acres" type="number" step="0.1" placeholder="any">
-    </div>
-    <div>
-      <label>Max acres</label>
-      <input id="filter-max-acres" type="number" step="0.1" placeholder="any">
+<header class="topbar">
+  <div class="topbar-brand">
+    <span class="brand-mark" aria-hidden="true">VL</span>
+    <div class="brand-text">
+      <span class="brand-name">Vacant Land Toolkit</span>
+      <span class="brand-tag">Land intelligence &amp; acquisition screening</span>
     </div>
   </div>
-  <label>Min years owned</label>
-  <input id="filter-min-years" type="number" step="1" placeholder="any">
-  <label class="filter-check"><input type="checkbox" id="filter-tax-flagged"> Tax lien / foreclosure flagged only</label>
-  <label class="filter-check"><input type="checkbox" id="filter-absentee"> Absentee owner only (different city/state)</label>
-  <label class="filter-check"><input type="checkbox" id="filter-individual"> Individual owner only</label>
-  <label>Deal potential (after Score Deal Potential)</label>
-  <select id="filter-deal-potential">
-    <option value="">All</option>
-    <option value="Strong">Strong</option>
-    <option value="Moderate">Moderate</option>
-    <option value="Weak">Weak</option>
-    <option value="Avoid">Avoid</option>
-    <option value="Insufficient information">Insufficient information</option>
-    <option value="unscored">Not yet deep-screened</option>
-  </select>
-  <label>Sort by</label>
-  <select id="sort-by">
-    <option value="priority">Priority (recommended)</option>
-    <option value="instant_score">Instant score</option>
-    <option value="acres_desc">Acres (high to low)</option>
-    <option value="acres_asc">Acres (low to high)</option>
-    <option value="land_value_desc">Land value (high to low)</option>
-  </select>
-  <button type="button" class="clear-filters" onclick="clearFilters()">Clear all filters</button>
-  <div id="filter-status"></div>
+  <div class="topbar-disclaimer">Screening aid — not a substitute for title, survey, or professional verification.</div>
+</header>
 
-  <h2>Map overlay</h2>
-  <div class="heat-toggle">
-    <button id="heat-none" class="active" onclick="setHeat('none')">Off</button>
-    <button id="heat-value" onclick="setHeat('value')">Land value</button>
-    <button id="heat-distressed" onclick="setHeat('distressed')">Distressed concentration</button>
-  </div>
+<div class="shell">
+  <aside class="panel" id="side-panel">
+    <div class="panel-mobile-header">
+      <span>Search &amp; Filters</span>
+      <button type="button" class="btn btn-sm" onclick="closeMobileSearch()">Done</button>
+    </div>
 
-  <h2>Priority Picks</h2>
-  <p style="font-size:11px; color:#666; margin:2px 0 6px;">
-    Answers "of these results, which deserve my attention first?" -- combines instant signals
-    (tax/lien flags, absentee ownership, tenure, owner type) with Deal Potential once you've
-    run Score Deal Potential on a parcel.
-  </p>
-  <div id="priority-picks"></div>
+    <section class="panel-section" id="main-search">
+      <h2 class="panel-title">1 &middot; Discover</h2>
+      <div class="field">
+        <label for="state">State</label>
+        <input id="state" value="FL" maxlength="2" autocapitalize="characters" autocorrect="off">
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="county">County (optional)</label>
+          <input id="county" value="Lee" autocapitalize="words">
+        </div>
+        <div class="field">
+          <label for="city">City (optional)</label>
+          <input id="city" value="Cape Coral" autocapitalize="words">
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="min_acres">Min acres</label>
+          <input id="min_acres" type="number" step="0.1" inputmode="decimal">
+        </div>
+        <div class="field">
+          <label for="max_acres">Max acres</label>
+          <input id="max_acres" type="number" step="0.1" inputmode="decimal">
+        </div>
+      </div>
+      <div class="field">
+        <label for="api_key">Realie API key (your own — required)</label>
+        <input id="api_key" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="paste your Realie key — get a free one at realie.ai">
+      </div>
+      <button id="search-btn" class="btn btn-primary btn-block" onclick="runSearch()">Search vacant land (1 Realie token)</button>
+      <div id="status" class="status-line" role="status" aria-live="polite"></div>
+    </section>
 
-  <h2>Results (<span id="result-count">0</span>)</h2>
-  <div class="heat-toggle">
-    <button onclick="downloadCsv()">Download CSV</button>
-    <button onclick="openPrintView()">Print list</button>
-  </div>
-  <button onclick="scoreAllResults()">Score Deal Potential (top 20 shown -- takes 1-2 min)</button>
-  <div id="score-status" style="font-size:11px; color:#666; margin-top:4px;"></div>
-  <div id="results"></div>
+    <details class="panel-section collapsible" open>
+      <summary class="panel-title">2 &middot; Screen &amp; Prioritize</summary>
+      <p class="panel-hint">Instant and free — works on results you already have, no new Realie tokens spent. Nothing is deleted, only reordered or hidden from view.</p>
+      <div class="field-row">
+        <div class="field">
+          <label for="filter-min-acres">Min acres</label>
+          <input id="filter-min-acres" type="number" step="0.1" inputmode="decimal" placeholder="any">
+        </div>
+        <div class="field">
+          <label for="filter-max-acres">Max acres</label>
+          <input id="filter-max-acres" type="number" step="0.1" inputmode="decimal" placeholder="any">
+        </div>
+      </div>
+      <div class="field">
+        <label for="filter-min-years">Min years owned</label>
+        <input id="filter-min-years" type="number" step="1" inputmode="numeric" placeholder="any">
+      </div>
+      <label class="checkline"><input type="checkbox" id="filter-tax-flagged"> Tax lien / foreclosure flagged only</label>
+      <label class="checkline"><input type="checkbox" id="filter-absentee"> Absentee owner only (different city/state)</label>
+      <label class="checkline"><input type="checkbox" id="filter-individual"> Individual owner only</label>
+      <div class="field">
+        <label for="filter-deal-potential">Opportunity tier (after scoring)</label>
+        <select id="filter-deal-potential">
+          <option value="">All</option>
+          <option value="Strong">Strong</option>
+          <option value="Moderate">Moderate</option>
+          <option value="Weak">Weak</option>
+          <option value="Avoid">Avoid</option>
+          <option value="Insufficient information">Insufficient information</option>
+          <option value="unscored">Not yet deep-screened</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="sort-by">Sort by</label>
+        <select id="sort-by">
+          <option value="priority">Priority (recommended)</option>
+          <option value="instant_score">Instant score</option>
+          <option value="acres_desc">Acres (high to low)</option>
+          <option value="acres_asc">Acres (low to high)</option>
+          <option value="land_value_desc">Land value (high to low)</option>
+        </select>
+      </div>
+      <button type="button" class="btn-ghost" onclick="clearFilters()">Clear all filters</button>
+    </details>
 
-  <span class="stage-label">3. RESEARCH &rarr; CONTACT OWNER &rarr; DUE DILIGENCE &rarr; OFFER/NEGOTIATE</span>
-  <h2>Parcel detail</h2>
-  <div id="detail">Click a result or map marker to see the full report. Every parcel report walks through: is it worth pursuing, why, the risks, who owns it, what to verify, what to say to the owner, who it fits as a buyer, and comps to check before an offer.</div>
+    <details class="panel-section collapsible">
+      <summary class="panel-title">Tools</summary>
 
-  <span class="stage-label">CONTACT OWNER</span>
-  <h2>Skip Tracing (your own Tracerfy account)</h2>
-  <p style="font-size:11px; color:#666; margin:2px 0 6px;">
-    Every lookup bills YOUR OWN Tracerfy account directly -- this site never
-    sees or pays for it. No account? <a href="https://www.tracerfy.com/" target="_blank">Sign up at tracerfy.com</a>.
-  </p>
-  <label>Tracerfy API key</label>
-  <input id="tracerfy_key" type="password" placeholder="paste your Tracerfy key">
-  <button onclick="skipTraceAll()">Skip Trace All Results</button>
-  <div id="skiptrace-status" style="font-size:12px; color:#666; margin-top:4px;"></div>
+      <h3 class="section-heading" style="margin-top:2px;">Skip Tracing</h3>
+      <p class="panel-hint">Every lookup bills YOUR OWN Tracerfy account directly — this site never sees or pays for it. No account? <a href="https://www.tracerfy.com/" target="_blank" rel="noopener">Sign up at tracerfy.com</a>.</p>
+      <div class="field">
+        <label for="tracerfy_key">Tracerfy API key</label>
+        <input id="tracerfy_key" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="paste your Tracerfy key">
+      </div>
+      <button class="btn btn-block" onclick="skipTraceAll()">Skip Trace All Results</button>
+      <div id="skiptrace-status" class="status-line" role="status" aria-live="polite"></div>
 
-  <span class="stage-label">DUE DILIGENCE</span>
-  <h2>Tax delinquency lookup (8 places only)</h2>
-  <p style="font-size:11px; color:#666; margin:2px 0 6px;">
-    Manual cross-check for the 8 counties/cities this toolkit has a direct government tax-
-    delinquency feed for -- a supplement to the automatic tax/lien flag already shown per result,
-    for confirming specifics with the county's own record before an offer.
-  </p>
-  <label>Place</label>
-  <select id="delinquency-place">
-    {% for key, place in delinquency_checks.items() %}
-    <option value="{{ key }}" data-example="{{ place.example }}" data-label="{{ place.id_label }}">{{ place.label }}</option>
-    {% endfor %}
-  </select>
-  <label id="delinquency-id-label">Account number</label>
-  <input id="delinquency-id" placeholder="000080001506">
-  <button onclick="checkDelinquency()">Check</button>
-  <div id="delinquency-result" style="font-size:12px; white-space:pre-wrap; margin-top:8px;"></div>
+      <h3 class="section-heading" style="margin-top:18px;">Tax Delinquency Lookup</h3>
+      <p class="panel-hint">Manual cross-check for the places this toolkit has a direct government tax-delinquency feed for — a supplement to the automatic tax/lien flag already shown per result.</p>
+      <div class="field">
+        <label for="delinquency-place">Place</label>
+        <select id="delinquency-place">
+          {% for key, place in delinquency_checks.items() %}
+          <option value="{{ key }}" data-example="{{ place.example }}" data-label="{{ place.id_label }}">{{ place.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label id="delinquency-id-label" for="delinquency-id">Account number</label>
+        <input id="delinquency-id" placeholder="000080001506">
+      </div>
+      <button class="btn btn-block" onclick="checkDelinquency()">Check</button>
+      <div id="delinquency-result"></div>
+    </details>
+  </aside>
+
+  <main class="workspace">
+    <div class="workspace-toolbar">
+      <div class="result-count-line">Results: <span id="result-count">0</span></div>
+      <div class="toolbar-actions">
+        <div class="toolbar-actions-secondary">
+          <button class="btn btn-sm" onclick="downloadCsv()">Export CSV</button>
+          <button class="btn btn-sm" onclick="openPrintView()">Print list</button>
+        </div>
+        <button id="score-all-btn" class="btn btn-sm btn-primary" onclick="scoreAllResults()">Score Deal Potential</button>
+      </div>
+    </div>
+    <div id="score-status" class="status-line toolbar-note" role="status" aria-live="polite"></div>
+
+    <div class="workspace-body">
+      <section class="results-pane active-view" id="results-pane">
+        <div id="priority-picks" class="priority-picks"></div>
+        <div class="section-heading">All results</div>
+        <div id="filter-status" class="filter-status-line"></div>
+        <div id="results"></div>
+      </section>
+
+      <section class="map-pane" id="map-pane">
+        <div id="map"></div>
+        <div class="map-overlay-controls" role="group" aria-label="Map overlay">
+          <button class="btn-sm active" id="heat-none" onclick="setHeat('none')">Off</button>
+          <button class="btn-sm" id="heat-value" onclick="setHeat('value')">Land value</button>
+          <button class="btn-sm" id="heat-distressed" onclick="setHeat('distressed')">Distressed</button>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <div class="detail-scrim" id="detail-scrim" onclick="closeDetailDrawer()"></div>
+  <aside class="detail-drawer" id="detail-drawer" aria-hidden="true" aria-label="Parcel report">
+    <div class="detail-drawer-header">
+      <span>Parcel Report</span>
+      <button type="button" class="detail-close" onclick="closeDetailDrawer()" aria-label="Close parcel report">&times;</button>
+    </div>
+    <div id="detail" class="detail-body">
+      <div class="empty-state">
+        <strong>No parcel selected</strong>
+        Click a result or a map marker to see the full opportunity report — deal potential, key risks, who owns it, what to verify, and what to say to the owner.
+      </div>
+    </div>
+  </aside>
 </div>
 
-<div id="map"></div>
+<nav class="mobile-bottom-nav" id="mobile-bottom-nav" aria-label="Main">
+  <button type="button" class="mobile-nav-btn" id="nav-btn-search" onclick="showMobileSearch()">Search</button>
+  <button type="button" class="mobile-nav-btn active" id="nav-btn-results" onclick="handleNavView('list')">
+    Results<span class="mobile-nav-badge" id="nav-result-count">0</span>
+  </button>
+  <button type="button" class="mobile-nav-btn" id="nav-btn-map" onclick="handleNavView('map')">Map</button>
+</nav>
 
 <script>
-const map = L.map('map').setView([27.6648, -81.5158], 7); // Florida-ish default
+const map = L.map('map', {zoomControl: true}).setView([27.6648, -81.5158], 7); // Florida-ish default
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '&copy; OpenStreetMap contributors'
 }).addTo(map);
@@ -295,20 +726,101 @@ function saveResultsToStorage() {
 function restoreResultsFromStorage() {
   try {
     const saved = localStorage.getItem(RESULTS_STORAGE_KEY);
-    if (!saved) return;
-    currentResults = JSON.parse(saved);
-    if (currentResults.length) {
-      document.getElementById('result-count').textContent = currentResults.length;
-      setStatus(`Restored ${currentResults.length} results from your last search.`);
-      refreshView();
-      renderHeat();
+    if (saved) {
+      currentResults = JSON.parse(saved);
+      if (currentResults.length) {
+        setResultCount(currentResults.length);
+        setStatus(`Restored ${currentResults.length} results from your last search.`);
+      }
     }
   } catch (e) {
     console.warn('Could not restore results from local storage:', e);
   }
+  // Bug found and fixed 2026-09-14 (mobile UX audit, caught by an actual
+  // screenshot at page load): this used to return early above whenever
+  // there was nothing saved yet -- a first-ever visit, or any time
+  // storage had been cleared -- which meant refreshView() never ran at
+  // all and the Results screen was a literal BLANK WHITE PANE instead of
+  // the "No search run yet" empty-state message renderResults() already
+  // knows how to show for zero results. Now runs unconditionally so a
+  // brand-new visitor always sees a real empty state, never nothing.
+  refreshView();
+  renderHeat();
 }
 
-function setStatus(msg) { document.getElementById('status').textContent = msg; }
+function setStatus(msg, kind) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.classList.toggle('is-error', kind === 'error');
+  el.classList.toggle('is-busy', kind === 'busy');
+}
+
+// --- Mobile: bottom nav (Search / Results / Map) + overlay back-button ---
+// Fixed 2026-09-14 (mobile UX audit): opening the parcel-report drawer or
+// the full-screen mobile search overlay now pushes a history entry, and
+// EVERY way of closing one -- an on-screen close button, tapping a
+// different bottom-nav destination, or Android's hardware/gesture back
+// action -- goes through the same history.back() path. Before this fix,
+// nothing here touched history at all, so the back button/gesture didn't
+// close an open overlay -- it left the page (or did nothing useful),
+// which reads as a broken app on Android, not a working one. This is
+// applied on desktop too (harmless there: clicking Back just closes an
+// open drawer instead of leaving the page), rather than as two separate
+// code paths to keep in sync.
+function openOverlay(kind) {
+  history.pushState({vltOverlay: kind}, '');
+}
+function requestCloseOverlay() {
+  if (history.state && history.state.vltOverlay) {
+    history.back();
+  } else {
+    hideAllOverlays();
+  }
+}
+function hideAllOverlays() {
+  document.getElementById('detail-drawer').classList.remove('open');
+  document.getElementById('detail-drawer').setAttribute('aria-hidden', 'true');
+  document.getElementById('detail-scrim').classList.remove('open');
+  document.getElementById('side-panel').classList.remove('mobile-open');
+}
+window.addEventListener('popstate', hideAllOverlays);
+
+function showMobileSearch() {
+  document.getElementById('side-panel').classList.add('mobile-open');
+  openOverlay('search');
+}
+function closeMobileSearch() {
+  requestCloseOverlay();
+}
+
+function setActiveNav(view) {
+  document.getElementById('nav-btn-results').classList.toggle('active', view === 'list');
+  document.getElementById('nav-btn-map').classList.toggle('active', view === 'map');
+  document.body.classList.toggle('mobile-map-active', view === 'map');
+}
+
+function showView(view) {
+  document.getElementById('results-pane').classList.toggle('active-view', view === 'list');
+  document.getElementById('map-pane').classList.toggle('active-view', view === 'map');
+  setActiveNav(view);
+  if (view === 'map') setTimeout(() => map.invalidateSize(), 50);
+}
+
+function handleNavView(view) {
+  // Tapping Results/Map while the mobile search overlay is open should
+  // also dismiss the overlay, the same as tapping Done.
+  if (document.getElementById('side-panel').classList.contains('mobile-open')) {
+    requestCloseOverlay();
+  }
+  showView(view);
+}
+
+function setResultCount(n) {
+  document.getElementById('result-count').textContent = n;
+  const badge = document.getElementById('nav-result-count');
+  badge.textContent = n;
+  badge.classList.toggle('has-results', n > 0);
+}
 
 async function runSearch() {
   const body = {
@@ -319,19 +831,43 @@ async function runSearch() {
     max_acres: document.getElementById('max_acres').value,
     api_key: document.getElementById('api_key').value,
   };
-  setStatus('Searching...');
-  const resp = await fetch('/api/search', {
-    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
-  });
-  const data = await resp.json();
-  if (data.error) { setStatus('Error: ' + data.error); return; }
+  const btn = document.getElementById('search-btn');
+  btn.disabled = true;
+  setStatus('Searching…', 'busy');
+  let data;
+  try {
+    const resp = await fetch('/api/search', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+    });
+    data = await resp.json();
+  } catch (e) {
+    btn.disabled = false;
+    setStatus('Network error: ' + e, 'error');
+    return;
+  }
+  btn.disabled = false;
+  if (data.error) { setStatus('Error: ' + data.error, 'error'); return; }
 
   currentResults = data.results;
   saveResultsToStorage();
   setStatus(`Found ${data.count} genuinely vacant parcels, sorted by instant priority (highest first).`);
-  document.getElementById('result-count').textContent = data.count;
+  setResultCount(data.count);
   refreshView();
   renderHeat();
+
+  // Mobile UX fix (2026-09-14 audit): a search used to leave the results
+  // hidden behind the still-open filter panel, forcing an extra manual
+  // tap to see anything -- the SEARCH -> REVIEW RESULTS step of the
+  // actual workflow shouldn't need a second action. On a phone, finishing
+  // a search now closes the search overlay and switches straight to the
+  // Results tab. Desktop is unaffected -- the sidebar there is always
+  // visible already, there's no overlay to close.
+  if (window.matchMedia('(max-width: 899px)').matches) {
+    if (document.getElementById('side-panel').classList.contains('mobile-open')) {
+      requestCloseOverlay();
+    }
+    showView('list');
+  }
 }
 
 // --- Screening: filters, combined priority ranking, Priority Picks -----
@@ -431,23 +967,32 @@ function refreshView() {
   renderPriorityPicks();
 }
 
+function el(tag, opts) {
+  opts = opts || {};
+  const e = document.createElement(tag);
+  if (opts.className) e.className = opts.className;
+  if (opts.text !== undefined) e.textContent = opts.text;
+  return e;
+}
+
 function pickReasonLine(text, cls) {
-  return el('div', {className: 'pick-reason' + (cls ? ' ' + cls : ''), text: text});
+  return el('div', {className: 'card-reason' + (cls ? ' ' + cls : ''), text: text});
 }
 
 function renderPickRow(r, opts) {
   opts = opts || {};
   const row = el('div', {className: 'pick-row'});
-  row.appendChild(el('span', {className: 'deal-dot ' + (r.color || 'unscored')}));
+  row.tabIndex = 0;
+  row.appendChild(el('span', {className: 'tier-dot ' + (r.color || 'unscored')}));
 
-  const main = el('div', {className: 'pick-main'});
-  const title = el('div', {className: 'pick-title'});
-  title.appendChild(document.createTextNode(`${r.apn} -- ${r.acres ? r.acres.toFixed(2) : '?'} ac`));
+  const main = el('div', {className: 'card-main'});
+  const title = el('div', {className: 'card-title-row'});
+  title.appendChild(el('span', {className: 'card-apn', text: r.apn}));
+  title.appendChild(el('span', {className: 'card-acres', text: `${r.acres ? r.acres.toFixed(2) : '?'} ac`}));
   if (r.deal_potential) {
-    title.appendChild(document.createTextNode(' -- '));
-    title.appendChild(el('span', {className: 'deal-tier-label ' + (r.color || ''), text: r.deal_potential}));
+    title.appendChild(el('span', {className: 'tier-label ' + (r.color || ''), text: r.deal_potential}));
   } else {
-    title.appendChild(document.createTextNode(` -- instant score ${r.instant_score || 0}`));
+    title.appendChild(el('span', {className: 'card-acres', text: `score ${r.instant_score || 0}`}));
   }
   main.appendChild(title);
 
@@ -458,7 +1003,9 @@ function renderPickRow(r, opts) {
   if (opts.note) main.appendChild(pickReasonLine(opts.note, 'note'));
 
   row.appendChild(main);
-  row.onclick = () => loadParcelDetail(rowKey(r));
+  const open = () => loadParcelDetail(rowKey(r));
+  row.onclick = open;
+  row.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } };
   return row;
 }
 
@@ -471,8 +1018,10 @@ function renderPriorityPicks() {
   const topN = Math.min(10, ranked.length);
   const top = ranked.slice(0, topN);
 
-  container.appendChild(el('div', {className: 'pick-section-title', text: `Focus on these first (top ${topN} of ${currentResults.length})`}));
-  top.forEach(r => container.appendChild(renderPickRow(r)));
+  const topBlock = el('div', {className: 'pick-block'});
+  topBlock.appendChild(el('div', {className: 'pick-block-title', text: `Focus on these first (top ${topN} of ${currentResults.length})`}));
+  top.forEach(r => topBlock.appendChild(renderPickRow(r)));
+  container.appendChild(topBlock);
 
   // "Hidden opportunity": screens Strong/Moderate on the deep, evidence-
   // based check, yet has a low instant score -- meaning a customer
@@ -482,18 +1031,22 @@ function renderPriorityPicks() {
     (r.deal_potential === 'Strong' || r.deal_potential === 'Moderate') && (r.instant_score || 0) < 15
   );
   if (hidden.length) {
-    container.appendChild(el('div', {className: 'pick-section-title', text: `Hidden opportunities (${hidden.length})`}));
-    container.appendChild(el('div', {className: 'pick-section-hint', text: 'No obvious distress/absentee signal at search time, but screens well once checked.'}));
-    hidden.forEach(r => container.appendChild(renderPickRow(r, {note: 'Easy to overlook at a glance -- worth a look anyway.'})));
+    const block = el('div', {className: 'pick-block'});
+    block.appendChild(el('div', {className: 'pick-block-title', text: `Hidden opportunities (${hidden.length})`}));
+    block.appendChild(el('div', {className: 'pick-block-hint', text: 'No obvious distress/absentee signal at search time, but screens well once checked.'}));
+    hidden.forEach(r => block.appendChild(renderPickRow(r, {note: 'Easy to overlook at a glance — worth a look anyway.'})));
+    container.appendChild(block);
   }
 
   const lowest = currentResults.filter(r => r.deal_potential === 'Avoid')
     .concat(currentResults.filter(r => r.deal_potential === 'Weak'))
     .slice(0, 5);
   if (lowest.length) {
-    container.appendChild(el('div', {className: 'pick-section-title', text: `Lowest priority (${lowest.length})`}));
-    container.appendChild(el('div', {className: 'pick-section-hint', text: 'Deep-screened and found real problems -- see why before spending any more time.'}));
-    lowest.forEach(r => container.appendChild(renderPickRow(r, {negative: true})));
+    const block = el('div', {className: 'pick-block'});
+    block.appendChild(el('div', {className: 'pick-block-title', text: `Lowest priority (${lowest.length})`}));
+    block.appendChild(el('div', {className: 'pick-block-hint', text: 'Deep-screened and found real problems — see why before spending any more time.'}));
+    lowest.forEach(r => block.appendChild(renderPickRow(r, {negative: true})));
+    container.appendChild(block);
   }
 }
 
@@ -502,49 +1055,70 @@ function renderResults() {
   container.innerHTML = '';
   const filtered = getFilteredResults();
   const statusEl = document.getElementById('filter-status');
+
+  if (!currentResults.length) {
+    statusEl.textContent = '';
+    container.appendChild(el('div', {className: 'empty-state', text: ''}));
+    const empty = container.firstChild;
+    empty.innerHTML = '';
+    empty.appendChild(el('strong', {text: 'No search run yet'}));
+    empty.appendChild(document.createTextNode('Enter a state and your Realie key, then search to see genuinely vacant parcels here.'));
+    return;
+  }
+
   statusEl.textContent = filtered.length === currentResults.length
     ? `Showing all ${currentResults.length}.`
     : `Showing ${filtered.length} of ${currentResults.length} (filtered).`;
 
-  filtered.forEach(r => {
-    const div = document.createElement('div');
-    div.className = 'result-item';
+  if (!filtered.length) {
+    const empty = el('div', {className: 'empty-state'});
+    empty.appendChild(el('strong', {text: 'No results match your filters'}));
+    empty.appendChild(document.createTextNode('Try loosening a filter, or '));
+    const link = el('span', {text: 'clear all filters'});
+    link.style.color = 'var(--brand)'; link.style.cursor = 'pointer'; link.style.fontWeight = '600';
+    link.onclick = clearFilters;
+    empty.appendChild(link);
+    empty.appendChild(document.createTextNode('.'));
+    container.appendChild(empty);
+    return;
+  }
 
-    const dot = document.createElement('span');
-    dot.className = 'deal-dot ' + (r.color || 'unscored');
+  filtered.forEach(r => {
+    const card = el('div', {className: 'result-card'});
+    card.tabIndex = 0;
+
+    const dot = el('span', {className: 'tier-dot ' + (r.color || 'unscored')});
     dot.title = r.color
       ? `${r.deal_potential}: ${r.headline || ''}`
       : `Not yet deep-screened. Instant score ${r.instant_score || 0}: ${(r.instant_reasons && r.instant_reasons[0]) || (r.instant_negative_reasons && r.instant_negative_reasons[0]) || ''}`;
-    div.appendChild(dot);
+    card.appendChild(dot);
 
-    const main = document.createElement('span');
-    main.className = 'result-main';
-    main.style.cursor = 'pointer';
-    main.appendChild(document.createTextNode(`${r.apn} -- ${r.acres ? r.acres.toFixed(2) : '?'} ac`));
+    const main = el('div', {className: 'card-main'});
+    const titleRow = el('div', {className: 'card-title-row'});
+    titleRow.appendChild(el('span', {className: 'card-apn', text: r.apn}));
+    titleRow.appendChild(el('span', {className: 'card-acres', text: `${r.acres ? r.acres.toFixed(2) : '?'} ac`}));
     if (r.deal_potential) {
-      main.appendChild(document.createTextNode(' -- '));
-      const tierSpan = document.createElement('span');
-      tierSpan.className = 'deal-tier-label ' + (r.color || '');
-      tierSpan.textContent = r.deal_potential;
-      main.appendChild(tierSpan);
+      titleRow.appendChild(el('span', {className: 'tier-label ' + (r.color || ''), text: r.deal_potential}));
     } else if (r.instant_score) {
-      main.appendChild(document.createTextNode(` -- score ${r.instant_score}`));
+      titleRow.appendChild(el('span', {className: 'card-acres', text: `score ${r.instant_score}`}));
     }
     if (r.tax_flags && r.tax_flags.flagged) {
-      main.appendChild(document.createTextNode(' '));
-      const flagSpan = document.createElement('span');
-      flagSpan.className = 'flagged';
-      flagSpan.textContent = '[FLAG]';
-      main.appendChild(flagSpan);
+      titleRow.appendChild(el('span', {className: 'card-flag', text: 'TAX FLAG'}));
     }
-    if (r.owner_phone) {
-      main.appendChild(document.createTextNode(' — ' + r.owner_phone));
-    }
-    main.onclick = () => loadParcelDetail(rowKey(r));
-    div.appendChild(main);
+    main.appendChild(titleRow);
 
+    if (r.owner_phone) {
+      main.appendChild(el('div', {className: 'card-phone', text: r.owner_phone}));
+    }
+
+    const open = () => loadParcelDetail(rowKey(r));
+    card.onclick = open;
+    card.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } };
+    card.appendChild(main);
+
+    const footer = el('div', {className: 'card-footer-row'});
     if (!r.owner_phone) {
-      const btn = document.createElement('button');
+      const btn = el('button', {className: 'btn btn-sm'});
       // A FAILED lookup (network/API error) is not the same as "we
       // checked and there's no phone number" -- flag it distinctly so
       // a customer knows to retry rather than assuming this owner is
@@ -552,15 +1126,16 @@ function renderResults() {
       if (r.skip_trace_error) {
         btn.textContent = 'Retry Skip Trace';
         btn.title = 'Last attempt failed: ' + r.skip_trace_error;
-        btn.style.cssText = 'font-size:10px; padding:1px 4px; margin-left:4px; width:auto; background:#fdecea; border-color:#c0392b; color:#a52a1f;';
+        btn.classList.add('btn-danger-outline');
       } else {
         btn.textContent = 'Skip Trace';
-        btn.style.cssText = 'font-size:10px; padding:1px 4px; margin-left:4px; width:auto;';
       }
       btn.onclick = (e) => { e.stopPropagation(); skipTraceOne(rowKey(r)); };
-      div.appendChild(btn);
+      footer.appendChild(btn);
     }
-    container.appendChild(div);
+    if (footer.childNodes.length) main.appendChild(footer);
+
+    container.appendChild(card);
   });
 }
 
@@ -598,7 +1173,13 @@ async function scoreAllResults() {
   );
   if (!confirmed) return;
 
-  document.getElementById('score-status').textContent = `Scoring ${toScore.length} parcels... this can take a minute or two.`;
+  const btn = document.getElementById('score-all-btn');
+  btn.disabled = true;
+  const statusEl = document.getElementById('score-status');
+  statusEl.classList.add('is-busy');
+  statusEl.innerHTML = '';
+  statusEl.appendChild(el('span', {className: 'spinner'}));
+  statusEl.appendChild(document.createTextNode(`Scoring ${toScore.length} parcels… this can take a minute or two.`));
   try {
     const resp = await fetch('/api/parcel/score/bulk', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -609,7 +1190,9 @@ async function scoreAllResults() {
       body: JSON.stringify({parcels: toScore.map(r => ({apn: r.apn, raw: r.raw, key: rowKey(r)}))}),
     });
     const data = await resp.json();
-    if (data.error) { document.getElementById('score-status').textContent = 'Error: ' + data.error; return; }
+    btn.disabled = false;
+    statusEl.classList.remove('is-busy');
+    if (data.error) { statusEl.textContent = 'Error: ' + data.error; statusEl.classList.add('is-error'); return; }
 
     let scored = 0;
     data.results.forEach(res => {
@@ -620,9 +1203,12 @@ async function scoreAllResults() {
     });
     saveResultsToStorage();
     refreshView();
-    document.getElementById('score-status').textContent = `Scored ${scored} of ${toScore.length} parcels.`;
+    statusEl.textContent = `Scored ${scored} of ${toScore.length} parcels.`;
   } catch (e) {
-    document.getElementById('score-status').textContent = 'Error scoring results: ' + e;
+    btn.disabled = false;
+    statusEl.classList.remove('is-busy');
+    statusEl.classList.add('is-error');
+    statusEl.textContent = 'Error scoring results: ' + e;
   }
 }
 
@@ -647,7 +1233,7 @@ async function skipTraceOne(rk) {
   if (!apiKey) { alert('Enter your Tracerfy API key first.'); return; }
   const r = currentResults.find(x => rowKey(x) === rk);
   if (!r) { alert('Parcel not found in current results.'); return; }
-  document.getElementById('skiptrace-status').textContent = `Skip tracing ${r.apn}...`;
+  setSkiptraceStatus(`Skip tracing ${r.apn}…`, 'busy');
   const resp = await fetch(`/api/skiptrace/${encodeURIComponent(r.apn)}`, {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({tracerfy_api_key: apiKey, raw: r.raw}),
@@ -656,12 +1242,19 @@ async function skipTraceOne(rk) {
   if (data.error) {
     mergeSkipTraceResult(rk, {error: data.error});
     renderResults();
-    document.getElementById('skiptrace-status').textContent = 'Error: ' + data.error;
+    setSkiptraceStatus('Error: ' + data.error, 'error');
     return;
   }
   mergeSkipTraceResult(rk, data);
   renderResults();
-  document.getElementById('skiptrace-status').textContent = data.hit ? `Found a match for ${r.apn}.` : `No match found for ${r.apn}.`;
+  setSkiptraceStatus(data.hit ? `Found a match for ${r.apn}.` : `No match found for ${r.apn}.`);
+}
+
+function setSkiptraceStatus(msg, kind) {
+  const el = document.getElementById('skiptrace-status');
+  el.textContent = msg;
+  el.classList.toggle('is-error', kind === 'error');
+  el.classList.toggle('is-busy', kind === 'busy');
 }
 
 async function skipTraceAll() {
@@ -687,7 +1280,7 @@ async function skipTraceAll() {
   );
   if (!confirmed) return;
 
-  document.getElementById('skiptrace-status').textContent = `Skip tracing ${toTrace.length} owners...`;
+  setSkiptraceStatus(`Skip tracing ${toTrace.length} owners…`, 'busy');
   const resp = await fetch('/api/skiptrace/bulk', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
@@ -697,7 +1290,7 @@ async function skipTraceAll() {
     }),
   });
   const data = await resp.json();
-  if (data.error) { document.getElementById('skiptrace-status').textContent = 'Error: ' + data.error; return; }
+  if (data.error) { setSkiptraceStatus('Error: ' + data.error, 'error'); return; }
 
   // A per-lookup FAILURE (Tracerfy hiccup, network error) comes back
   // from /api/skiptrace/bulk shaped identically to a genuine "no match"
@@ -712,8 +1305,8 @@ async function skipTraceAll() {
     else misses++;
   });
   renderResults();
-  const failedNote = failed ? ` -- ${failed} lookup(s) FAILED and were not actually checked (click Skip Trace on those rows to retry).` : '';
-  document.getElementById('skiptrace-status').textContent = `Done -- ${hits} found a match, ${misses} had no match.${failedNote}`;
+  const failedNote = failed ? ` — ${failed} lookup(s) FAILED and were not actually checked (click Skip Trace on those rows to retry).` : '';
+  setSkiptraceStatus(`Done — ${hits} found a match, ${misses} had no match.${failedNote}`, failed ? 'error' : undefined);
 }
 
 // Column order/labels chosen to match the standard mail-merge format
@@ -801,10 +1394,10 @@ function renderMarkers() {
   const shown = getFilteredResults();
   if (!shown.length) return;
   const bounds = [];
-  const DEAL_MARKER_COLOR = {GREEN: 'green', YELLOW: 'orange', RED: 'red', GRAY: 'gray'};
+  const DEAL_MARKER_COLOR = {GREEN: '#1F7A4D', YELLOW: '#B8860B', RED: '#A63C34', GRAY: '#8B9188'};
   shown.forEach(r => {
-    const color = DEAL_MARKER_COLOR[r.color] || (r.tax_flags && r.tax_flags.flagged ? 'red' : 'green');
-    const marker = L.circleMarker([r.lat, r.lon], {radius: 6, color: color, fillOpacity: 0.7}).addTo(map);
+    const color = DEAL_MARKER_COLOR[r.color] || (r.tax_flags && r.tax_flags.flagged ? '#A63C34' : '#1F7A4D');
+    const marker = L.circleMarker([r.lat, r.lon], {radius: 7, color: '#fff', weight: 1.5, fillColor: color, fillOpacity: 0.9}).addTo(map);
     marker.bindTooltip(`${r.apn}<br>${r.acres ? r.acres.toFixed(2) : '?'} ac`);
     marker.on('click', () => loadParcelDetail(rowKey(r)));
     markers.push(marker);
@@ -815,7 +1408,7 @@ function renderMarkers() {
 
 function setHeat(mode) {
   heatMode = mode;
-  document.querySelectorAll('.heat-toggle button').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.map-overlay-controls button').forEach(b => b.classList.remove('active'));
   document.getElementById('heat-' + mode).classList.add('active');
   renderHeat();
 }
@@ -842,18 +1435,7 @@ function renderHeat() {
 // --- Evidence report rendering ------------------------------------------
 // Built entirely with createElement/textContent, never innerHTML string
 // interpolation of dynamic data -- some of this text (owner names,
-// addresses) comes from an external data source, and the results list's
-// use of innerHTML with unescaped external fields is a known, separate
-// issue (flagged in the architecture audit) that this new code
-// deliberately does not repeat.
-
-function el(tag, opts) {
-  opts = opts || {};
-  const e = document.createElement(tag);
-  if (opts.className) e.className = opts.className;
-  if (opts.text !== undefined) e.textContent = opts.text;
-  return e;
-}
+// addresses) comes from an external data source.
 
 const VERDICT_CLASS = {
   'PROMISING SCREENING RESULT': 'promising',
@@ -918,38 +1500,66 @@ function renderFindingCard(f) {
   return card;
 }
 
-// --- Decision engine rendering (Level 1: fast decision, Level 2: why) ---
-// The evidence report below (renderEvidenceReport) becomes Level 3
-// (source-by-source evidence); the raw-JSON toggle further down is
-// Level 4. Nothing from the evidence report is removed -- it's collapsed
-// behind a toggle so the decision summary is the first thing a customer
-// sees, not buried under 16 category cards.
+// --- Opportunity hero card (Level 1: the answer, Level 2: why) ---------
+// Answers, in order, the exact 5 things a customer should see
+// immediately: OPPORTUNITY, KEY POSITIVES, KEY RISKS, UNKNOWN ITEMS,
+// RECOMMENDED NEXT STEP -- everything else in this report is a drill-
+// down BELOW this card, never a prerequisite to seeing it.
 
-function appendDecisionList(container, title, items, className) {
-  if (!items || !items.length) return;
-  container.appendChild(el('div', {className: 'decision-list-title', text: title}));
-  const ul = el('ul', {className: 'decision-list ' + className});
-  items.forEach(item => ul.appendChild(el('li', {text: item})));
-  container.appendChild(ul);
+function opportunityColumn(title, cls, items, emptyText) {
+  const col = el('div', {className: 'opp-col'});
+  col.appendChild(el('div', {className: 'opp-col-title ' + cls, text: title}));
+  if (items && items.length) {
+    const ul = el('ul', {className: 'opp-list'});
+    items.forEach(t => ul.appendChild(el('li', {text: t})));
+    col.appendChild(ul);
+  } else {
+    col.appendChild(el('div', {className: 'opp-empty', text: emptyText}));
+  }
+  return col;
 }
 
 function renderDecisionSummary(container, decision) {
   if (!decision || decision.error) {
-    container.appendChild(el('div', {className: 'finding-row', text: 'Deal-potential summary failed: ' + (decision && decision.error || 'no data')}));
+    container.appendChild(el('div', {className: 'finding-row', text: 'Opportunity summary failed: ' + (decision && decision.error || 'no data')}));
     return;
   }
 
-  const banner = el('div', {className: `decision-banner ${decision.color || 'GRAY'}`});
-  banner.appendChild(el('div', {className: 'decision-tier', text: `Deal potential: ${decision.deal_potential}`}));
-  banner.appendChild(el('div', {className: 'decision-headline', text: decision.headline || ''}));
-  banner.appendChild(el('div', {className: 'decision-action', text: decision.recommended_action || ''}));
-  container.appendChild(banner);
+  const card = el('div', {className: 'opportunity-card'});
 
-  appendDecisionList(container, 'Deal-killer risks', decision.deal_killer_risks, 'killer');
-  appendDecisionList(container, 'Top positive factors', decision.top_positive_factors, 'positive');
-  appendDecisionList(container, 'Top risks', decision.top_risks, 'risk');
-  appendDecisionList(container, 'Unknown / unverified for this parcel', decision.key_unknowns, 'unknown');
-  appendDecisionList(container, 'Next steps', decision.next_steps, '');
+  const head = el('div', {className: `opportunity-head ${decision.color || 'GRAY'}`});
+  head.appendChild(el('div', {className: 'opportunity-eyebrow', text: 'Opportunity'}));
+  head.appendChild(el('div', {className: 'opportunity-tier', text: decision.deal_potential || 'Unknown'}));
+  if (decision.headline) head.appendChild(el('div', {className: 'opportunity-headline', text: decision.headline}));
+  card.appendChild(head);
+
+  if (decision.recommended_action) {
+    const action = el('div', {className: 'opportunity-action'});
+    action.appendChild(el('b', {text: 'Recommended next step'}));
+    action.appendChild(document.createTextNode(decision.recommended_action));
+    card.appendChild(action);
+  }
+
+  const grid = el('div', {className: 'opportunity-grid'});
+  grid.appendChild(opportunityColumn('Key positives', 'positives', decision.top_positive_factors, 'None identified.'));
+  const risks = (decision.deal_killer_risks && decision.deal_killer_risks.length) ? [] : (decision.top_risks || []);
+  grid.appendChild(opportunityColumn('Key risks', 'risks', risks, 'None identified.'));
+  if (decision.deal_killer_risks && decision.deal_killer_risks.length) {
+    grid.appendChild(opportunityColumn('Deal-killer risks', 'killers', decision.deal_killer_risks, ''));
+  }
+  grid.appendChild(opportunityColumn('Unknown items', 'unknowns', decision.key_unknowns, 'Nothing outstanding beyond the standard checklist below.'));
+  card.appendChild(grid);
+
+  container.appendChild(card);
+
+  if (decision.next_steps && decision.next_steps.length) {
+    const sub = el('div', {className: 'sub-card'});
+    sub.appendChild(el('h4', {text: 'Next steps'}));
+    const ul = el('ul', {className: 'sub-card-list'});
+    decision.next_steps.forEach(s => ul.appendChild(el('li', {text: s})));
+    sub.appendChild(ul);
+    container.appendChild(sub);
+  }
 }
 
 function renderEvidenceReport(container, evidence) {
@@ -964,7 +1574,7 @@ function renderEvidenceReport(container, evidence) {
   container.appendChild(banner);
 
   if (evidence.what_could_kill_the_deal && evidence.what_could_kill_the_deal.length) {
-    container.appendChild(el('h3', {text: 'What could kill the deal'}));
+    container.appendChild(el('h4', {text: 'What could kill the deal'}));
     const row = el('div', {className: 'bucket-row'});
     evidence.what_could_kill_the_deal.forEach(cat => row.appendChild(el('span', {className: 'bucket-chip', text: cat})));
     container.appendChild(row);
@@ -977,7 +1587,7 @@ function renderEvidenceReport(container, evidence) {
   ];
   bucketSpec.forEach(([label, cats]) => {
     if (!cats || !cats.length) return;
-    container.appendChild(el('h3', {text: label}));
+    container.appendChild(el('h4', {text: label}));
     const row = el('div', {className: 'bucket-row'});
     cats.forEach(cat => row.appendChild(el('span', {className: 'bucket-chip', text: cat})));
     container.appendChild(row);
@@ -988,46 +1598,48 @@ function renderEvidenceReport(container, evidence) {
   // above this evidence report (see renderDueDiligenceChecklist). Every
   // finding below still carries its own "Verify next" line, so nothing
   // is lost, just de-duplicated.
-  container.appendChild(el('h3', {text: 'Every finding, in detail'}));
+  container.appendChild(el('h4', {text: 'Every finding, in detail'}));
   (evidence.findings || []).forEach(f => container.appendChild(renderFindingCard(f)));
 }
 
 function renderBuyerFit(container, buyerFit) {
   if (!buyerFit || !buyerFit.length) return;
-  container.appendChild(el('div', {className: 'stage-label', text: 'OFFER/NEGOTIATE -- buyer fit'}));
+  const sub = el('div', {className: 'sub-card'});
+  sub.appendChild(el('div', {className: 'stage-label', text: 'Offer / negotiate — buyer fit'}));
   const row = el('div', {className: 'buyer-fit-row'});
   buyerFit.forEach(t => {
     const tag = el('span', {className: 'buyer-fit-tag', text: t.tag});
     tag.title = t.reason;
     row.appendChild(tag);
   });
-  container.appendChild(row);
+  sub.appendChild(row);
+  container.appendChild(sub);
 }
 
 function renderOutreachList(box, title, items, cls) {
   if (!items || !items.length) return;
-  box.appendChild(el('div', {className: 'finding-row' + (cls ? ' ' + cls : ''), text: title}));
-  const ul = el('ul', {className: 'outreach-list'});
+  box.appendChild(el('div', {className: 'sub-card-list-title' + (cls ? ' ' + cls : ''), text: title}));
+  const ul = el('ul', {className: 'sub-card-list'});
   items.forEach(x => ul.appendChild(el('li', {text: x})));
   box.appendChild(ul);
 }
 
 function renderOutreachBrief(container, brief) {
   if (!brief || brief.error) return;
-  container.appendChild(el('div', {className: 'stage-label', text: 'CONTACT OWNER'}));
-  const box = el('div', {className: 'outreach-box'});
+  const box = el('div', {className: 'sub-card'});
+  box.appendChild(el('div', {className: 'stage-label', text: 'Contact owner'}));
   box.appendChild(el('h4', {text: 'Before you call: what to know & what to ask'}));
-  box.appendChild(el('div', {className: 'finding-row', text: brief.property_summary}));
-  box.appendChild(el('div', {className: 'finding-row', text: 'Owner: ' + brief.owner_summary}));
-  if (brief.absentee_note) box.appendChild(el('div', {className: 'finding-row limitation', text: brief.absentee_note}));
+  box.appendChild(el('div', {className: 'sub-card-row', text: brief.property_summary}));
+  box.appendChild(el('div', {className: 'sub-card-row', text: 'Owner: ' + brief.owner_summary}));
+  if (brief.absentee_note) box.appendChild(el('div', {className: 'sub-card-row note', text: brief.absentee_note}));
 
-  renderOutreachList(box, 'Why this could be worth pursuing:', brief.why_reaching_out);
-  renderOutreachList(box, 'Questions to ask the owner:', brief.questions_to_ask);
-  renderOutreachList(box, "Be careful about (don't necessarily raise this directly):", brief.caution_notes, 'limitation');
+  renderOutreachList(box, 'Why this could be worth pursuing', brief.why_reaching_out);
+  renderOutreachList(box, 'Questions to ask the owner', brief.questions_to_ask);
+  renderOutreachList(box, "Be careful about (don't necessarily raise this directly)", brief.caution_notes, 'note');
 
   box.appendChild(el('div', {className: 'disclaimer-banner', text: brief.disclaimer}));
 
-  const copyBtn = el('button', {className: 'copy-btn', text: 'Copy outreach notes'});
+  const copyBtn = el('button', {className: 'btn btn-sm', text: 'Copy outreach notes'});
   copyBtn.onclick = () => {
     const lines = [
       brief.property_summary, 'Owner: ' + brief.owner_summary, brief.absentee_note || '',
@@ -1048,11 +1660,11 @@ function renderOutreachBrief(container, brief) {
 
 function renderDueDiligenceChecklist(container, evidence) {
   if (!evidence || evidence.error || !evidence.what_to_verify_next || !evidence.what_to_verify_next.length) return;
-  container.appendChild(el('div', {className: 'stage-label', text: 'DUE DILIGENCE'}));
-  container.appendChild(el('h4', {text: 'Checklist before you make an offer'}));
-  const hint = el('div', {className: 'finding-row', text: 'Not a substitute for title, survey, engineering, environmental, septic, or zoning verification -- these are the specific items this screening surfaced for this parcel.'});
-  hint.style.color = '#666';
-  container.appendChild(hint);
+  const box = el('div', {className: 'sub-card'});
+  box.appendChild(el('div', {className: 'stage-label', text: 'Due diligence'}));
+  box.appendChild(el('h4', {text: 'Checklist before you make an offer'}));
+  const hint = el('div', {className: 'sub-card-row', text: 'Not a substitute for title, survey, engineering, environmental, septic, or zoning verification -- these are the specific items this screening surfaced for this parcel.'});
+  box.appendChild(hint);
   evidence.what_to_verify_next.forEach((step, i) => {
     const item = el('div', {className: 'checklist-item'});
     const cb = document.createElement('input');
@@ -1063,15 +1675,18 @@ function renderDueDiligenceChecklist(container, evidence) {
     label.htmlFor = cb.id;
     label.textContent = step;
     item.appendChild(label);
-    container.appendChild(item);
+    box.appendChild(item);
   });
+  container.appendChild(box);
 }
 
 function renderComps(container, listingLinks) {
-  container.appendChild(el('div', {className: 'stage-label', text: 'OFFER/NEGOTIATE -- check comps'}));
-  container.appendChild(el('h4', {text: 'Check comps before you offer'}));
+  const box = el('div', {className: 'sub-card'});
+  box.appendChild(el('div', {className: 'stage-label', text: 'Offer / negotiate — check comps'}));
+  box.appendChild(el('h4', {text: 'Check comps before you offer'}));
   if (!listingLinks || !Object.keys(listingLinks).length) {
-    container.appendChild(el('div', {className: 'finding-row', text: 'No property address on file to build comp-search links for this parcel.'}));
+    box.appendChild(el('div', {className: 'sub-card-row', text: 'No property address on file to build comp-search links for this parcel.'}));
+    container.appendChild(box);
     return;
   }
   const LABELS = {zillow: 'Zillow', land_com: 'Land.com', realtor_com: 'Realtor.com', homes_com: 'Homes.com'};
@@ -1082,7 +1697,8 @@ function renderComps(container, listingLinks) {
     a.textContent = `Search ${LABELS[key] || key} →`;
     row.appendChild(a);
   });
-  container.appendChild(row);
+  box.appendChild(row);
+  container.appendChild(box);
 }
 
 // In-memory cache of full parcel reports, keyed by rowKey -- NOT
@@ -1098,41 +1714,67 @@ function renderComps(container, listingLinks) {
 // point to allow a fresh answer.
 const parcelReportCache = new Map();
 
+function openDetailDrawer() {
+  document.getElementById('detail-drawer').classList.add('open');
+  document.getElementById('detail-drawer').setAttribute('aria-hidden', 'false');
+  document.getElementById('detail-scrim').classList.add('open');
+  openOverlay('detail');
+}
+
+function closeDetailDrawer() {
+  requestCloseOverlay();
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.getElementById('detail-drawer').classList.contains('open')) closeDetailDrawer();
+});
+
 async function loadParcelDetail(rk, forceRefresh) {
   const r = currentResults.find(x => rowKey(x) === rk);
   const detailEl = document.getElementById('detail');
+  openDetailDrawer();
   if (!r) { detailEl.textContent = 'Parcel not found in current results.'; return; }
 
   let data = !forceRefresh && parcelReportCache.get(rk);
   const fromCache = !!data;
   if (!data) {
-    detailEl.textContent = 'Loading full evidence report...';
-    const resp = await fetch(`/api/parcel/${encodeURIComponent(r.apn)}/report`, {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({raw: r.raw, acres: r.acres}),
-    });
+    detailEl.innerHTML = '';
+    const loading = el('div', {className: 'empty-state'});
+    loading.appendChild(el('span', {className: 'spinner'}));
+    loading.appendChild(document.createTextNode(' Loading full opportunity report — this checks flood, wetlands, slope, septic, zoning, and more…'));
+    detailEl.appendChild(loading);
+    let resp;
+    try {
+      resp = await fetch(`/api/parcel/${encodeURIComponent(r.apn)}/report`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({raw: r.raw, acres: r.acres}),
+      });
+    } catch (e) {
+      detailEl.innerHTML = '';
+      detailEl.appendChild(el('div', {className: 'empty-state', text: 'Network error loading this report: ' + e}));
+      return;
+    }
     data = await resp.json();
     if (!data.error) parcelReportCache.set(rk, data);
   }
   detailEl.innerHTML = '';
-  if (data.error) { detailEl.textContent = 'Error: ' + data.error; return; }
+  if (data.error) {
+    detailEl.appendChild(el('div', {className: 'empty-state', text: 'Error: ' + data.error}));
+    return;
+  }
 
   detailEl.appendChild(el('div', {className: 'disclaimer-banner', text:
     'Screening result only -- not a substitute for title, survey, county, engineering, environmental, septic, or zoning verification by a licensed professional.'}));
-  detailEl.appendChild(el('h3', {text: `APN: ${data.apn}`}));
 
+  const apnRow = el('div', {className: 'parcel-apn-line', text: `APN ${data.apn}`});
   if (fromCache) {
-    const cacheNote = el('div', {className: 'level-toggle', text: 'Showing a cached report from earlier this session -- Refresh for current data'});
-    cacheNote.style.color = '#666';
-    cacheNote.style.textDecoration = 'none';
-    const refreshLink = el('span', {className: 'level-toggle', text: 'Refresh'});
-    refreshLink.style.marginLeft = '6px';
+    const refreshLink = el('button', {className: 'btn-ghost', text: 'Refresh'});
+    refreshLink.style.marginLeft = '10px';
     refreshLink.onclick = () => loadParcelDetail(rk, true);
-    const row = el('div');
-    row.appendChild(cacheNote);
-    row.appendChild(refreshLink);
-    detailEl.appendChild(row);
+    apnRow.appendChild(document.createTextNode(' · cached from earlier this session · '));
+    apnRow.appendChild(refreshLink);
   }
+  detailEl.appendChild(apnRow);
 
   const owner = data.current_owner || {};
   if (owner.owner_name) {
@@ -1152,7 +1794,8 @@ async function loadParcelDetail(rk, forceRefresh) {
     detailEl.appendChild(flagRow);
   }
 
-  // Answers "is this worth pursuing, why, and what are the risks" (Level 1+2).
+  // Answers, immediately and in order: OPPORTUNITY, KEY POSITIVES, KEY
+  // RISKS, UNKNOWN ITEMS, RECOMMENDED NEXT STEP (Level 1 + 2).
   renderDecisionSummary(detailEl, data.decision || {});
 
   if (r && data.decision && !data.decision.error) {
@@ -1170,7 +1813,7 @@ async function loadParcelDetail(rk, forceRefresh) {
   // Supports the offer/negotiate step -- comps, not a suggested price.
   renderComps(detailEl, data.listing_links);
 
-  const evidenceToggle = el('span', {className: 'level-toggle', text: 'Show full evidence report (every category, source & limitation)'});
+  const evidenceToggle = el('button', {className: 'level-toggle', text: 'Show full evidence report (every category, source & limitation)'});
   const evidenceBox = el('div', {className: 'level-section'});
   renderEvidenceReport(evidenceBox, data.evidence || {});
   evidenceToggle.onclick = () => {
@@ -1182,7 +1825,7 @@ async function loadParcelDetail(rk, forceRefresh) {
   detailEl.appendChild(evidenceToggle);
   detailEl.appendChild(evidenceBox);
 
-  const rawToggle = el('span', {className: 'raw-toggle', text: 'Show raw data (for developers)'});
+  const rawToggle = el('button', {className: 'raw-toggle', text: 'Show raw data (for developers)'});
   const rawBox = el('pre', {className: '', text: JSON.stringify(data, null, 2)});
   rawBox.id = 'detail-raw';
   rawToggle.onclick = () => {
@@ -1209,15 +1852,44 @@ document.getElementById('delinquency-place').addEventListener('change', function
 async function checkDelinquency() {
   const place = document.getElementById('delinquency-place').value;
   const id = document.getElementById('delinquency-id').value.trim();
-  const el = document.getElementById('delinquency-result');
-  if (!id) { el.textContent = 'Enter an ID first.'; return; }
-  el.textContent = 'Checking...';
+  const resultEl = document.getElementById('delinquency-result');
+  if (!id) { resultEl.textContent = 'Enter an ID first.'; return; }
+  resultEl.textContent = 'Checking…';
   const resp = await fetch(`/api/delinquency/${place}?id=${encodeURIComponent(id)}`);
   const data = await resp.json();
-  el.textContent = JSON.stringify(data, null, 2);
+  resultEl.textContent = JSON.stringify(data, null, 2);
 }
 
 restoreResultsFromStorage();
+
+// PWA installability: registers the app-shell service worker (see
+// static/sw.js -- network-first for the page itself, so a visitor is
+// never stuck on a stale deploy; cache exists only as an offline
+// fallback). Purely additive; if registration fails for any reason
+// (unsupported browser, blocked by a privacy setting) the site works
+// exactly as before, just without the "add to home screen" install
+// prompt.
+//
+// The reload-on-controllerchange line below is the other half of the
+// no-stale-version guarantee: skipWaiting()/clients.claim() in sw.js
+// make a new service worker take over immediately instead of waiting for
+// every open tab to close first, but taking over control does NOT by
+// itself refresh an already-loaded page's HTML/JS in memory -- a visitor
+// who left a tab open across a deploy would otherwise keep running the
+// OLD page indefinitely even with a newer worker now in charge. This
+// reloads that one time, automatically, so "install once, always get
+// the current app" actually holds.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch((e) => console.warn('Service worker registration failed:', e));
+  });
+  let reloadedForNewWorker = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (reloadedForNewWorker) return;
+    reloadedForNewWorker = true;
+    window.location.reload();
+  });
+}
 </script>
 </body>
 </html>

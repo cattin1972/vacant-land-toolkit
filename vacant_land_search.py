@@ -3905,6 +3905,25 @@ def build_evidence_report(buildability: dict, zoning: dict, tax_flags: dict, own
             limitation="A building-count proxy, not a verified neighborhood survey.",
             next_step="Review satellite imagery or visit the area to see actual surrounding development.",
         ))
+    else:
+        # Fixed 2026-09-14 regression checkpoint: this category was
+        # silently OMITTED from the report whenever the Overpass call
+        # failed (a real, observed transient condition -- see
+        # check_nearby_development's own retry logic), instead of being
+        # recorded as unknown like every other category in this report.
+        # That shrank the screenable-findings denominator used by the
+        # decision engine below, which could shift a parcel's tier
+        # between two identical requests purely because of a network
+        # hiccup -- reproduced live: 17 findings one run, 18 the next,
+        # for the exact same coordinate. Recording it as UNKNOWN (not
+        # omitting it) is what every other category already does and
+        # keeps the tier calculation consistent regardless of which
+        # external calls happened to succeed this time.
+        findings.append(_no_data_finding(
+            "Nearby development / surrounding houses",
+            "OpenStreetMap Overpass",
+            "Review satellite imagery or visit the area to see actual surrounding development.",
+        ))
 
     # --- Buildable area / development potential (the redesigned metric) ----
     if flood_wetland is not None:
@@ -3925,6 +3944,23 @@ def build_evidence_report(buildability: dict, zoning: dict, tax_flags: dict, own
             explanation="Deliberately renamed and reframed from an earlier 'buildability score' -- that name implied more than this measurement actually establishes.",
             limitation="Measured against a placeholder boundary, one factor among many required for actual development.",
             next_step="Treat this as one input among many, not a standalone buildability answer -- confirm the boundary, zoning, access, and utilities separately.",
+        ))
+    else:
+        # Fixed 2026-09-14 regression checkpoint: same silent-omission bug
+        # as "Nearby development" above, but for a _HARD_STOP_CATEGORY --
+        # a failed flood/wetland lookup used to just vanish from the
+        # report instead of being recorded as unknown, shrinking the
+        # screenable-findings denominator and letting a transient failure
+        # here silently change a parcel's computed tier. Recording it as
+        # UNKNOWN (not CONCERN) is correct and safe: a hard stop only
+        # fires on a CONFIRMED concern in this category (see
+        # _HARD_STOP_CATEGORIES / build_decision_summary above), never on
+        # an unknown one -- this fix cannot newly force an "Avoid" tier,
+        # it can only stop this category from being silently dropped.
+        findings.append(_no_data_finding(
+            "Physical usable area (screening only)",
+            "FEMA National Flood Hazard Layer + USFWS National Wetlands Inventory",
+            "Order a formal wetland delineation and a FEMA elevation certificate before assuming this parcel is buildable.",
         ))
 
     return _finalize_evidence_report(findings, tax_flags, owner_mailing)

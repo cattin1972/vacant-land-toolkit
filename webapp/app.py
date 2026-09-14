@@ -20,7 +20,7 @@ from functools import wraps
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import vacant_land_search as v
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, make_response, render_template, request, send_from_directory
 
 app = Flask(__name__)
 
@@ -176,14 +176,51 @@ def _placeholder_boundary(lat: float, lon: float) -> list[tuple[float, float]]:
     ]
 
 
+def _no_cache(response):
+    # Belt-and-suspenders against the exact class of problem found
+    # 2026-09-14 (a real deployed-vs-local mismatch, root-caused to work
+    # never having been pushed at all -- not a caching bug). This alone
+    # would not have caused or fixed that specific incident, but it
+    # closes a DIFFERENT, real risk the same investigation surfaced: once
+    # a service worker is live, an ordinary browser HTTP cache sitting in
+    # front of it could independently serve a stale "/" response using
+    # only heuristic caching rules, with no cache-control header telling
+    # it not to. Forcing revalidation on every load costs one cheap
+    # conditional request and guarantees a visitor's browser always asks
+    # the server whether "/" changed before using any cached copy.
+    response = make_response(response)
+    response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 @app.route("/")
 def index():
-    return render_template("index.html", delinquency_checks=DELINQUENCY_CHECKS)
+    return _no_cache(render_template("index.html", delinquency_checks=DELINQUENCY_CHECKS))
 
 
 @app.route("/print")
 def print_view():
     return render_template("print.html")
+
+
+@app.route("/manifest.json")
+def pwa_manifest():
+    return _no_cache(send_from_directory("static", "manifest.json", mimetype="application/manifest+json"))
+
+
+@app.route("/sw.js")
+def pwa_service_worker():
+    # Served from the site ROOT (not /static/sw.js) so its default scope
+    # covers the whole origin -- a service worker's scope is limited to
+    # its own URL's directory unless the server sends a
+    # Service-Worker-Allowed header, and this is simpler than that.
+    # no-cache here matters even more than on "/": browsers already only
+    # check a service worker script for updates at most once every 24h on
+    # their own, and only skip that if the HTTP response is explicitly
+    # marked non-cacheable -- so an old sw.js sitting in the ordinary HTTP
+    # cache could otherwise delay this file's own update-detection well
+    # beyond a single deploy.
+    return _no_cache(send_from_directory("static", "sw.js", mimetype="application/javascript"))
 
 
 @app.route("/api/health/sources")
