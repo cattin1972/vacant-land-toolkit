@@ -41,6 +41,26 @@ app = Flask(__name__)
 # number, etc.) that isn't derivable from a Realie search result, so
 # this is offered as its own lookup tool rather than auto-matched to
 # search results.
+
+
+def _check_nyc_tax_lien_by_bbl_string(bbl_string: str) -> dict:
+    """
+    Adapter so NYC's check (borough, block, lot as 3 separate params --
+    the only one of the 8 places shaped this way) fits the same single-
+    text-field UI every other place here uses, instead of needing its
+    own special-cased form. Expects "borough-block-lot", e.g. "1-16-3"
+    (matches the BBL format check_nyc_tax_lien_sale_list itself already
+    returns for display). check_nyc_tax_lien_sale_list() was built and
+    tested earlier in this project but never actually wired in here --
+    found as an open item during the 2026-09-14 data-source audit.
+    """
+    parts = [p.strip() for p in bbl_string.split("-")]
+    if len(parts) != 3 or not all(parts):
+        raise ValueError("Enter NYC's BBL as borough-block-lot, e.g. 1-16-3 (see the example below the field).")
+    borough, block, lot = parts
+    return v.check_nyc_tax_lien_sale_list(borough, block, lot)
+
+
 DELINQUENCY_CHECKS = {
     "king_county": {
         "label": "King County, WA",
@@ -83,6 +103,12 @@ DELINQUENCY_CHECKS = {
         "id_label": "Tax ID",
         "example": "02-216-0025",
         "fn": v.check_cache_county_tax_delinquency,
+    },
+    "nyc": {
+        "label": "New York City",
+        "id_label": "BBL (borough-block-lot)",
+        "example": "1-16-3",
+        "fn": _check_nyc_tax_lien_by_bbl_string,
     },
 }
 
