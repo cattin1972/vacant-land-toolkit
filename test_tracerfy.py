@@ -115,4 +115,29 @@ with patch("vacant_land_search.requests.post") as mock_post:
     assert results[2]["hit"] is True
 print("ALL PASS")
 
+print("\n=== Test 7: a 200 response with no 'hit' field is an ERROR, never a silent 'no match' ===")
+# Regression test for a real bug found during the 2026-09-14 external-
+# data-source audit: a degraded Tracerfy response (200 OK, but missing
+# the documented 'hit' field entirely -- e.g. an {"error": ...} body)
+# used to read as payload.get("hit") -> None -> falsy -> a confident
+# "no match found," after real money had already been billed for a
+# lookup that never actually completed.
+with patch("vacant_land_search.requests.post") as mock_post:
+    mock_post.return_value = fake_response({"error": "internal issue", "credits_deducted": 1})
+    try:
+        v.skip_trace_owner("1 First St", "Austin", "TX", api_key="FAKEKEY")
+        print("FAIL: should have raised on a missing 'hit' field")
+    except RuntimeError as e:
+        print(f"OK, raised instead of silently reporting no match: {e}")
+print("ALL PASS")
+
+# And bulk mode must turn that into a per-item error, not a silent miss.
+with patch("vacant_land_search.requests.post") as mock_post:
+    mock_post.return_value = fake_response({"error": "internal issue", "credits_deducted": 1})
+    results = v.skip_trace_owners_bulk([{"apn": "A1", "street": "1 First St", "city": "Austin", "state": "TX"}], api_key="FAKEKEY")
+    print(results)
+    assert results[0]["hit"] is False
+    assert "error" in results[0], "a degraded response must surface as an error, not a bare miss"
+print("ALL PASS")
+
 print("\n=== ALL TESTS PASSED (mocked only -- see file docstring) ===")

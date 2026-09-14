@@ -152,4 +152,55 @@ with patch("vacant_land_search.requests.get", side_effect=bad_request), patch("v
         assert call_count["n"] == 1, f"FAIL: retried a 4xx {call_count['n']} times"
 print("ALL PASS -- did not waste retries on a non-transient error")
 
+print("\n=== Test 7: malformed-but-present amount fields never become a false 'not delinquent' ===")
+# A real delinquency ROW exists (rows is non-empty) but its dollar
+# amount is garbage -- the honest result is UNKNOWN, never a confident
+# "delinquent: False", and never a silent $0.
+bad_rows = [{"biitem": "X2", "bwtaxyear": "2024", "owner_name": "B OWNER", "address": "2 MAIN ST", "total": "N/A"}]
+with patch("vacant_land_search.requests.get") as mock_get:
+    mock_get.return_value = fake_response(bad_rows)
+    result = v.check_norfolk_tax_delinquency("X2")
+    print(result)
+    assert result["delinquent"] is None, "must be UNKNOWN, not a confident False"
+    assert result["amount_owed"] is None
+    assert "data_quality_issue" in result
+print("Norfolk: PASS")
+
+bad_sonoma_rows = [{"assessment_number": "S1", "defaultamt": "garbage", "taxyear": "2024"}]
+with patch("vacant_land_search.requests.get") as mock_get:
+    mock_get.return_value = fake_response(bad_sonoma_rows)
+    result = v.check_sonoma_county_tax_delinquency("S1")
+    print(result)
+    assert result["delinquent"] is None
+    assert result["amount_owed"] is None
+print("Sonoma: PASS")
+
+bad_richmond_rows = [{"property_code": "R1", "bill_year": "2024", "current_owner_name_1": "C OWNER", "total_due": "???"}]
+with patch("vacant_land_search.requests.get") as mock_get:
+    mock_get.return_value = fake_response(bad_richmond_rows)
+    result = v.check_richmond_tax_delinquency("R1")
+    print(result)
+    assert result["delinquent"] is None
+    assert result["amount_owed"] is None
+print("Richmond: PASS")
+
+bad_king_rows = [{"billed_amount": "not-a-number", "paid_amount": "0"}]
+with patch("vacant_land_search.requests.get") as mock_get:
+    mock_get.return_value = fake_response(bad_king_rows)
+    result = v.check_king_county_delinquent_tax("K1")
+    print(result)
+    assert result["delinquent"] is None
+    assert result["amount_owed"] is None
+print("King County: PASS")
+
+# And the normal, clean-data path must still work exactly as before --
+# genuinely absent fields default to 0 without raising.
+clean_rows = [{"biitem": "X3", "bwtaxyear": "2024", "owner_name": "D OWNER", "address": "3 MAIN ST", "total": None}]
+with patch("vacant_land_search.requests.get") as mock_get:
+    mock_get.return_value = fake_response(clean_rows)
+    result = v.check_norfolk_tax_delinquency("X3")
+    assert result["delinquent"] is False
+    assert result["amount_owed"] == 0.0
+print("Genuinely-absent field still defaults to 0, unaffected by this fix: PASS")
+
 print("\n=== ALL TESTS PASSED ===")

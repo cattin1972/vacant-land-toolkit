@@ -52,6 +52,7 @@
   .status-badge.status-CONCERN { background: #c0392b; }
   .status-badge.status-UNKNOWN { background: #78909c; }
   .evidence-badge { font-size: 9px; color: #666; border: 1px solid #ccc; border-radius: 8px; padding: 1px 6px; white-space: nowrap; }
+  .quick-label-badge { font-size: 9px; font-weight: bold; letter-spacing: 0.02em; color: #5a4300; background: #fff3cd; border: 1px solid #d4a017; border-radius: 8px; padding: 1px 6px; white-space: nowrap; }
   .finding-row { font-size: 11px; margin-top: 4px; line-height: 1.4; }
   .finding-row b { color: #333; }
   .finding-row.limitation { color: #a05a00; }
@@ -364,6 +365,20 @@ function comparePriority(a, b) {
   return aTier !== bTier ? aTier - bTier : aScore - bScore;
 }
 
+// APNs are only unique WITHIN a county, not statewide (see app.py's own
+// module-level note on this) -- a state-wide search spanning multiple
+// counties could genuinely have two different parcels share the same
+// APN string. currentResults.find(x => x.apn === someApn) would then
+// silently resolve to the WRONG parcel: a report, decision tier, or
+// skip-trace result could get attached to the wrong row with no visible
+// error. Found during the 2026-09-14 external-data-source audit under
+// "multiple parcels were confused." Fix: every lookup in this file uses
+// this composite key (apn + exact centroid) instead of bare apn --
+// two genuinely different parcels essentially never share both.
+function rowKey(r) {
+  return `${r.apn}|${r.lat}|${r.lon}`;
+}
+
 function isAbsentee(r) {
   if (!r.mail_state && !r.mail_city) return false;
   if (r.mail_state && r.state && r.mail_state.toUpperCase() !== r.state.toUpperCase()) return true;
@@ -443,7 +458,7 @@ function renderPickRow(r, opts) {
   if (opts.note) main.appendChild(pickReasonLine(opts.note, 'note'));
 
   row.appendChild(main);
-  row.onclick = () => loadParcelDetail(r.apn);
+  row.onclick = () => loadParcelDetail(rowKey(r));
   return row;
 }
 
@@ -525,14 +540,24 @@ function renderResults() {
     if (r.owner_phone) {
       main.appendChild(document.createTextNode(' — ' + r.owner_phone));
     }
-    main.onclick = () => loadParcelDetail(r.apn);
+    main.onclick = () => loadParcelDetail(rowKey(r));
     div.appendChild(main);
 
     if (!r.owner_phone) {
       const btn = document.createElement('button');
-      btn.textContent = 'Skip Trace';
-      btn.style.cssText = 'font-size:10px; padding:1px 4px; margin-left:4px; width:auto;';
-      btn.onclick = (e) => { e.stopPropagation(); skipTraceOne(r.apn); };
+      // A FAILED lookup (network/API error) is not the same as "we
+      // checked and there's no phone number" -- flag it distinctly so
+      // a customer knows to retry rather than assuming this owner is
+      // simply unreachable.
+      if (r.skip_trace_error) {
+        btn.textContent = 'Retry Skip Trace';
+        btn.title = 'Last attempt failed: ' + r.skip_trace_error;
+        btn.style.cssText = 'font-size:10px; padding:1px 4px; margin-left:4px; width:auto; background:#fdecea; border-color:#c0392b; color:#a52a1f;';
+      } else {
+        btn.textContent = 'Skip Trace';
+        btn.style.cssText = 'font-size:10px; padding:1px 4px; margin-left:4px; width:auto;';
+      }
+      btn.onclick = (e) => { e.stopPropagation(); skipTraceOne(rowKey(r)); };
       div.appendChild(btn);
     }
     container.appendChild(div);
@@ -577,14 +602,18 @@ async function scoreAllResults() {
   try {
     const resp = await fetch('/api/parcel/score/bulk', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({parcels: toScore.map(r => ({apn: r.apn, raw: r.raw}))}),
+      // "key" travels with each parcel and is echoed back unchanged --
+      // matching results back to rows by bare apn would misattribute a
+      // report if two different parcels in this batch happened to
+      // share an APN (real risk across counties; see rowKey's own note).
+      body: JSON.stringify({parcels: toScore.map(r => ({apn: r.apn, raw: r.raw, key: rowKey(r)}))}),
     });
     const data = await resp.json();
     if (data.error) { document.getElementById('score-status').textContent = 'Error: ' + data.error; return; }
 
     let scored = 0;
     data.results.forEach(res => {
-      const r = currentResults.find(x => x.apn === res.apn);
+      const r = currentResults.find(x => rowKey(x) === res.key);
       if (!r || res.error) return;
       applyDecisionToResult(r, res);
       scored++;
@@ -597,29 +626,42 @@ async function scoreAllResults() {
   }
 }
 
-function mergeSkipTraceResult(apn, trace) {
-  const r = currentResults.find(x => x.apn === apn);
+function mergeSkipTraceResult(rk, trace) {
+  const r = currentResults.find(x => rowKey(x) === rk);
   if (!r) return;
   if (trace.phones && trace.phones.length) r.owner_phone = trace.phones.map(p => p.number).join('; ');
   if (trace.emails && trace.emails.length) r.owner_email = trace.emails.join('; ');
+  // A lookup that FAILED (network error, Tracerfy hiccup, etc. -- see
+  // skip_trace_owners_bulk's per-item error handling) must never look
+  // identical to a lookup that genuinely ran and found no match. Both
+  // currently come back as hit:false from the bulk endpoint; only the
+  // presence of `error` tells them apart. Recording it separately lets
+  // the results list show "trace failed, retry" instead of silently
+  // implying "we checked, no phone number exists."
+  r.skip_trace_error = trace.error || null;
   saveResultsToStorage();
 }
 
-async function skipTraceOne(apn) {
-  const key = document.getElementById('tracerfy_key').value.trim();
-  if (!key) { alert('Enter your Tracerfy API key first.'); return; }
-  const r = currentResults.find(x => x.apn === apn);
+async function skipTraceOne(rk) {
+  const apiKey = document.getElementById('tracerfy_key').value.trim();
+  if (!apiKey) { alert('Enter your Tracerfy API key first.'); return; }
+  const r = currentResults.find(x => rowKey(x) === rk);
   if (!r) { alert('Parcel not found in current results.'); return; }
-  document.getElementById('skiptrace-status').textContent = `Skip tracing ${apn}...`;
-  const resp = await fetch(`/api/skiptrace/${encodeURIComponent(apn)}`, {
+  document.getElementById('skiptrace-status').textContent = `Skip tracing ${r.apn}...`;
+  const resp = await fetch(`/api/skiptrace/${encodeURIComponent(r.apn)}`, {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({tracerfy_api_key: key, raw: r.raw}),
+    body: JSON.stringify({tracerfy_api_key: apiKey, raw: r.raw}),
   });
   const data = await resp.json();
-  if (data.error) { document.getElementById('skiptrace-status').textContent = 'Error: ' + data.error; return; }
-  mergeSkipTraceResult(apn, data);
+  if (data.error) {
+    mergeSkipTraceResult(rk, {error: data.error});
+    renderResults();
+    document.getElementById('skiptrace-status').textContent = 'Error: ' + data.error;
+    return;
+  }
+  mergeSkipTraceResult(rk, data);
   renderResults();
-  document.getElementById('skiptrace-status').textContent = data.hit ? `Found a match for ${apn}.` : `No match found for ${apn}.`;
+  document.getElementById('skiptrace-status').textContent = data.hit ? `Found a match for ${r.apn}.` : `No match found for ${r.apn}.`;
 }
 
 async function skipTraceAll() {
@@ -650,17 +692,28 @@ async function skipTraceAll() {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
       tracerfy_api_key: key,
-      parcels: toTrace.map(r => ({apn: r.apn, raw: r.raw})),
+      parcels: toTrace.map(r => ({apn: r.apn, raw: r.raw, key: rowKey(r)})),
       max_lookups: maxLookups,
     }),
   });
   const data = await resp.json();
   if (data.error) { document.getElementById('skiptrace-status').textContent = 'Error: ' + data.error; return; }
 
-  let hits = 0;
-  data.results.forEach(r => { mergeSkipTraceResult(r.apn, r); if (r.hit) hits++; });
+  // A per-lookup FAILURE (Tracerfy hiccup, network error) comes back
+  // from /api/skiptrace/bulk shaped identically to a genuine "no match"
+  // (hit:false either way) except for the `error` field -- counting it
+  // as a plain miss would let a customer conclude an owner has no
+  // findable contact info, when really the lookup never actually ran.
+  let hits = 0, misses = 0, failed = 0;
+  data.results.forEach(r => {
+    mergeSkipTraceResult(r.key, r);
+    if (r.hit) hits++;
+    else if (r.error) failed++;
+    else misses++;
+  });
   renderResults();
-  document.getElementById('skiptrace-status').textContent = `Done -- ${hits} of ${data.count} found a match.`;
+  const failedNote = failed ? ` -- ${failed} lookup(s) FAILED and were not actually checked (click Skip Trace on those rows to retry).` : '';
+  document.getElementById('skiptrace-status').textContent = `Done -- ${hits} found a match, ${misses} had no match.${failedNote}`;
 }
 
 // Column order/labels chosen to match the standard mail-merge format
@@ -743,7 +796,7 @@ function renderMarkers() {
     const color = DEAL_MARKER_COLOR[r.color] || (r.tax_flags && r.tax_flags.flagged ? 'red' : 'green');
     const marker = L.circleMarker([r.lat, r.lon], {radius: 6, color: color, fillOpacity: 0.7}).addTo(map);
     marker.bindTooltip(`${r.apn}<br>${r.acres ? r.acres.toFixed(2) : '?'} ac`);
-    marker.on('click', () => loadParcelDetail(r.apn));
+    marker.on('click', () => loadParcelDetail(rowKey(r)));
     markers.push(marker);
     bounds.push([r.lat, r.lon]);
   });
@@ -805,6 +858,10 @@ function renderFindingCard(f) {
   const titleRow = el('div', {className: 'finding-title-row'});
   titleRow.appendChild(el('span', {className: 'finding-category', text: f.category}));
   const badges = el('span');
+  if (f.quick_label) {
+    badges.appendChild(el('span', {className: 'quick-label-badge', text: f.quick_label}));
+    badges.appendChild(document.createTextNode(' '));
+  }
   badges.appendChild(el('span', {className: `status-badge status-${f.status}`, text: f.status}));
   badges.appendChild(document.createTextNode(' '));
   badges.appendChild(el('span', {className: 'evidence-badge', text: f.evidence_level.replace('_', ' ')}));
@@ -1018,12 +1075,12 @@ function renderComps(container, listingLinks) {
   container.appendChild(row);
 }
 
-async function loadParcelDetail(apn) {
-  const r = currentResults.find(x => x.apn === apn);
+async function loadParcelDetail(rk) {
+  const r = currentResults.find(x => rowKey(x) === rk);
   const detailEl = document.getElementById('detail');
   if (!r) { detailEl.textContent = 'Parcel not found in current results.'; return; }
   detailEl.textContent = 'Loading full evidence report...';
-  const resp = await fetch(`/api/parcel/${encodeURIComponent(apn)}/report`, {
+  const resp = await fetch(`/api/parcel/${encodeURIComponent(r.apn)}/report`, {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({raw: r.raw, acres: r.acres}),
   });

@@ -108,6 +108,20 @@ def print_view():
     return render_template("print.html")
 
 
+@app.route("/api/health/sources")
+def api_health_sources():
+    """
+    Operator-facing diagnostic, not a customer-facing feature (not
+    linked from the UI) -- a quick "is any external data source having
+    a bad day right now" check without needing to dig through Render's
+    log viewer. Per-process, in-memory, resets on every restart/deploy
+    (see log_source_event's own docstring) -- a debugging aid, not a
+    durable observability system. Contains no customer data: only
+    source names, outcome counts, and generic error types.
+    """
+    return jsonify(v.get_source_health_summary())
+
+
 @app.route("/api/search", methods=["POST"])
 def api_search():
     data = request.get_json(force=True)
@@ -130,7 +144,13 @@ def api_search():
             max_acres=float(max_acres) if max_acres else None,
             api_key=api_key, max_pages=1,
         )
+        # No PII here -- state/county/city are search-area geography,
+        # not a specific parcel or person, and are the whole point of
+        # this log line (spotting "Realie has been down for Texas
+        # searches all afternoon" without needing anyone's address).
+        v.log_source_event("realie_search", "ok", detail=f"{state}/{county or '*'}/{city or '*'} -> {len(results)} results")
     except Exception as e:
+        v.log_source_event("realie_search", "error", detail=type(e).__name__)
         return jsonify({"error": str(e)}), 502
 
     out = []
@@ -353,6 +373,12 @@ def api_score_bulk():
             decision = {"error": str(e)}
         return {
             "apn": apn,
+            # Echoed back unchanged -- the frontend matches results back
+            # to rows by this composite key, not bare apn, since APNs
+            # are only unique within a county and a batch spanning
+            # multiple counties could otherwise misattribute a result
+            # to the wrong parcel (see rowKey() in index.html).
+            "key": p.get("key"),
             "deal_potential": decision.get("deal_potential"),
             "color": decision.get("color"),
             "headline": decision.get("headline"),
@@ -374,7 +400,7 @@ def api_score_bulk():
             try:
                 results.append(future.result())
             except Exception as e:
-                results.append({"apn": p.get("apn"), "error": str(e)})
+                results.append({"apn": p.get("apn"), "key": p.get("key"), "error": str(e)})
 
     return jsonify({
         "count": len(results),
@@ -428,7 +454,12 @@ def api_skiptrace_one(apn):
             mailing["mail_street"], mailing.get("mail_city"), mailing.get("mail_state"),
             zip_code=mailing.get("mail_zip"), api_key=api_key,
         )
+        # Outcome only -- never the address/owner name this call just
+        # looked up (that's real PII from a real person, not something
+        # that belongs in a log file even without a name attached to it).
+        v.log_source_event("tracerfy", "ok" if result.get("hit") else "no_coverage")
     except Exception as e:
+        v.log_source_event("tracerfy", "error", detail=type(e).__name__)
         return jsonify({"error": str(e)}), 502
     return jsonify(result)
 
@@ -465,6 +496,11 @@ def api_skiptrace_bulk():
             continue
         owners.append({
             "apn": apn,
+            # Echoed back unchanged in each result -- the frontend
+            # matches results back to rows by this composite key, not
+            # bare apn, since two different parcels in one batch could
+            # share an APN across counties (see rowKey() in index.html).
+            "key": parcel.get("key"),
             "street": mailing["mail_street"],
             "city": mailing.get("mail_city"),
             "state": mailing.get("mail_state"),

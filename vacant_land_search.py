@@ -84,6 +84,7 @@ import logging
 import math
 import os
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass
@@ -99,6 +100,66 @@ from shapely.ops import transform as shp_transform, unary_union
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("vacant_land_search")
+
+# --------------------------------------------------------------------------
+# Structured per-source event logging (2026-09-14 external-data-source
+# audit). Every external call site in this file already has its own
+# try/except with a hand-written log message -- useful to a human
+# reading logs live, but inconsistent in format and impossible to
+# aggregate ("how often has FEMA failed this week?"). This adds ONE
+# consistent, greppable log line plus a small in-process counter for a
+# lightweight health snapshot, without a new logging framework/service.
+#
+# PRIVACY: `source` and `status` are always short fixed vocabulary
+# (a data-source name, "ok"/"no_coverage"/"source_unavailable"/"error").
+# `detail` must NEVER contain a parcel address, an owner's name, or an
+# API key -- an HTTP status code or exception class name is fine. This
+# is enforced by convention at each call site, not automatically, so
+# any new call site added later must follow the same rule.
+#
+# The counter is per-process, in-memory, and resets on every restart/
+# deploy -- it is a quick "is anything having a bad day right now"
+# check, not a durable observability system. If this ever runs behind
+# multiple gunicorn workers, each worker has its own counter; that's an
+# accepted, documented limitation, not a bug.
+_SOURCE_EVENT_LOCK = threading.Lock()
+_SOURCE_EVENT_COUNTS: dict[tuple[str, str], int] = {}
+_SOURCE_EVENT_RECENT: list[dict] = []
+_MAX_RECENT_SOURCE_EVENTS = 200
+
+
+def log_source_event(source: str, status: str, detail: str | None = None) -> None:
+    """
+    Records one external-data-source call outcome. `status` should be
+    one of: "ok", "no_coverage" (source responded, nothing usable for
+    this location), "source_unavailable" (request failed/timed out),
+    or "error" (an unexpected exception). See the module note above for
+    the privacy rule on `detail`.
+    """
+    log.info("data_source_event source=%s status=%s%s", source, status, f" detail={detail}" if detail else "")
+    with _SOURCE_EVENT_LOCK:
+        key = (source, status)
+        _SOURCE_EVENT_COUNTS[key] = _SOURCE_EVENT_COUNTS.get(key, 0) + 1
+        _SOURCE_EVENT_RECENT.append({
+            "source": source, "status": status, "detail": detail,
+            "at": datetime.utcnow().isoformat() + "Z",
+        })
+        if len(_SOURCE_EVENT_RECENT) > _MAX_RECENT_SOURCE_EVENTS:
+            del _SOURCE_EVENT_RECENT[0]
+
+
+def get_source_health_summary() -> dict:
+    """
+    A small in-process snapshot for a health/diagnostics endpoint --
+    NOT a durable store (see the module note above). Good for spotting
+    "FEMA's endpoint has failed 8 times in the last hour," not for
+    long-term trend analysis.
+    """
+    with _SOURCE_EVENT_LOCK:
+        totals: dict[str, dict[str, int]] = {}
+        for (source, status), count in _SOURCE_EVENT_COUNTS.items():
+            totals.setdefault(source, {})[status] = count
+        return {"totals": totals, "recent_events": list(_SOURCE_EVENT_RECENT[-50:])}
 
 # --------------------------------------------------------------------------
 # Config
@@ -772,13 +833,30 @@ def check_king_county_delinquent_tax(account_number: str) -> dict:
         return {}
 
     def _to_cents(v):
+        # A genuinely missing value is a normal 0; a PRESENT-but-
+        # unparseable value must not silently become 0 either, since
+        # billed_amount and paid_amount are subtracted from each other
+        # below -- a silent 0 on either side can flip "delinquent" wrong
+        # in EITHER direction (understating what's billed, or
+        # overstating what's paid), not just toward a false negative.
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return 0
         try:
             return int(v)
         except (TypeError, ValueError):
-            return 0
+            raise _UnparseableAmount(f"Could not parse billed/paid amount as a number: {v!r}")
 
-    total_billed_cents = sum(_to_cents(r.get("billed_amount")) for r in rows)
-    total_paid_cents = sum(_to_cents(r.get("paid_amount")) for r in rows)
+    try:
+        total_billed_cents = sum(_to_cents(r.get("billed_amount")) for r in rows)
+        total_paid_cents = sum(_to_cents(r.get("paid_amount")) for r in rows)
+    except _UnparseableAmount as e:
+        log.warning("King County tax delinquency: %s (account_number=%s)", e, account_number)
+        return {
+            "account_number": account_number,
+            "amount_owed": None,
+            "delinquent": None,
+            "data_quality_issue": "A billing record exists but a billed/paid amount could not be parsed from the source data -- verify manually.",
+        }
     owed_cents = total_billed_cents - total_paid_cents
 
     return {
@@ -889,16 +967,35 @@ def _get_socrata_json(url: str, params: dict):
     raise last_error
 
 
+class _UnparseableAmount(ValueError):
+    """A dollar-amount field was PRESENT but could not be parsed as a
+    number -- deliberately a different case from the field being
+    genuinely absent. See _to_float's docstring for why this
+    distinction matters."""
+
+
 def _to_float(value, default=0.0) -> float:
-    """Socrata datasets return every number as a string, sometimes with
-    a leading '$' and thousands commas (confirmed live in Richmond's
-    dataset) -- strip that before parsing."""
-    if value is None:
+    """
+    Socrata datasets return every number as a string, sometimes with a
+    leading '$' and thousands commas (confirmed live in Richmond's
+    dataset) -- strip that before parsing.
+
+    A genuinely missing/blank value (None or "") is a normal, legitimate
+    case and defaults to 0.0 -- no dollar amount reported for that row.
+    A value that IS present but doesn't parse as a number is a
+    different and more serious case: silently treating it as $0 would
+    turn "we couldn't read this field" into a confident "$0 owed" /
+    "not delinquent" for a row that the dataset actually returned as a
+    real delinquency record. Raises _UnparseableAmount for that case
+    instead so callers can surface an uncertain result, never a false
+    negative.
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
         return default
     try:
         return float(str(value).replace("$", "").replace(",", "").strip())
     except (TypeError, ValueError):
-        return default
+        raise _UnparseableAmount(f"Could not parse amount field as a number: {value!r}")
 
 
 def check_norfolk_tax_delinquency(biitem: str) -> dict:
@@ -921,8 +1018,24 @@ def check_norfolk_tax_delinquency(biitem: str) -> dict:
     if not rows:
         return {}
 
-    total_owed = sum(_to_float(r.get("total")) for r in rows)
     years = sorted({r.get("bwtaxyear") for r in rows if r.get("bwtaxyear")})
+    try:
+        total_owed = sum(_to_float(r.get("total")) for r in rows)
+    except _UnparseableAmount as e:
+        log.warning("Norfolk tax delinquency: %s (biitem=%s)", e, biitem)
+        # A real delinquency record WAS found (rows is non-empty) -- the
+        # dollar amount just couldn't be read. Reporting "delinquent:
+        # False" here would be a confident, false negative; UNKNOWN is
+        # the honest result.
+        return {
+            "biitem": biitem,
+            "owner": rows[0].get("owner_name"),
+            "address": rows[0].get("address"),
+            "amount_owed": None,
+            "years_owed": years,
+            "delinquent": None,
+            "data_quality_issue": "A delinquency record exists but its dollar amount could not be parsed from the source data -- verify manually.",
+        }
     return {
         "biitem": biitem,
         "owner": rows[0].get("owner_name"),
@@ -971,8 +1084,20 @@ def check_sonoma_county_tax_delinquency(assessment_number: str) -> dict:
 
     # The row with the highest defaultamt is the one that actually
     # carries the real default record -- see the HONEST LIMIT above.
-    default_row = max(rows, key=lambda r: _to_float(r.get("defaultamt")))
-    amount_owed = _to_float(default_row.get("defaultamt"))
+    # A field that's PRESENT but unparseable must not silently sort as
+    # $0 (that could pick the wrong row as "the" default row) or report
+    # a confident "not delinquent" -- surface it as uncertain instead.
+    try:
+        default_row = max(rows, key=lambda r: _to_float(r.get("defaultamt")))
+        amount_owed = _to_float(default_row.get("defaultamt"))
+    except _UnparseableAmount as e:
+        log.warning("Sonoma County tax delinquency: %s (assessment_number=%s)", e, assessment_number)
+        return {
+            "assessment_number": assessment_number,
+            "amount_owed": None,
+            "delinquent": None,
+            "data_quality_issue": "A delinquency record exists but its dollar amount could not be parsed from the source data -- verify manually.",
+        }
     return {
         "assessment_number": assessment_number,
         "owner_address": " ".join(filter(None, [default_row.get("mailaddress1"), default_row.get("mailaddress2")])),
@@ -1006,8 +1131,19 @@ def check_richmond_tax_delinquency(property_code: str) -> dict:
     if not rows:
         return {}
 
-    total_owed = sum(_to_float(r.get("total_due")) for r in rows)
     years = sorted({r.get("bill_year") for r in rows if r.get("bill_year")})
+    try:
+        total_owed = sum(_to_float(r.get("total_due")) for r in rows)
+    except _UnparseableAmount as e:
+        log.warning("Richmond tax delinquency: %s (property_code=%s)", e, property_code)
+        return {
+            "property_code": property_code,
+            "owner": rows[0].get("current_owner_name_1"),
+            "amount_owed": None,
+            "years_owed": years,
+            "delinquent": None,
+            "data_quality_issue": "A delinquency record exists but its dollar amount could not be parsed from the source data -- verify manually.",
+        }
     return {
         "property_code": property_code,
         "owner": rows[0].get("current_owner_name_1"),
@@ -1192,22 +1328,34 @@ def check_zoning_district(lat: float, lon: float) -> dict:
     Returns:
         {"source": "Miami-Dade County, FL (unincorporated areas only)",
          "zoning_code": ..., "zoning_description": ..., "municipality": ..., "overlay": ...}
-    or {} if this point isn't covered by either known layer.
+    or {} if BOTH layers were successfully queried and neither covers this point
+    or {"lookup_failed": True} if at least one layer's request itself failed
+        (network error, timeout, HTTP error) rather than cleanly confirming
+        no coverage -- deliberately a DIFFERENT, distinguishable result from
+        plain {}. Conflating "we tried and confirmed you're outside our 2
+        counties" with "our government source didn't respond" was a real
+        bug found during the 2026-09-14 external-data-source audit: a
+        customer in Kendall, FL could see "outside our coverage" when the
+        true, more useful answer was "try again" or "verify manually."
     """
     # Run both known layers IN PARALLEL rather than one after another --
     # they're independent (a point can only ever be covered by one of
     # them), and this also means a slow/failed Miami-Dade lookup no
     # longer prevents King County from being tried, which the old
     # sequential try/fall-through structure would have done.
+    any_call_failed = False
     with ThreadPoolExecutor(max_workers=2) as pool:
         miami_future = pool.submit(_query_zoning_point, MIAMI_DADE_ZONING_URL, lat, lon)
         king_future = pool.submit(_query_zoning_point, KING_COUNTY_ZONING_URL, lat, lon)
 
         try:
             attrs = miami_future.result()
-        except Exception:
+            log_source_event("zoning_miami_dade", "ok" if attrs else "no_coverage")
+        except Exception as e:
             log.warning("Miami-Dade zoning lookup failed or timed out")
+            log_source_event("zoning_miami_dade", "source_unavailable", detail=type(e).__name__)
             attrs = None
+            any_call_failed = True
         if attrs:
             return {
                 "source": "Miami-Dade County, FL (unincorporated areas only)",
@@ -1219,9 +1367,12 @@ def check_zoning_district(lat: float, lon: float) -> dict:
 
         try:
             attrs = king_future.result()
-        except Exception:
+            log_source_event("zoning_king_county", "ok" if attrs else "no_coverage")
+        except Exception as e:
             log.warning("King County zoning lookup failed or timed out")
+            log_source_event("zoning_king_county", "source_unavailable", detail=type(e).__name__)
             attrs = None
+            any_call_failed = True
         if attrs:
             return {
                 "source": "King County, WA (unincorporated areas only)",
@@ -1230,6 +1381,8 @@ def check_zoning_district(lat: float, lon: float) -> dict:
                 "current_temporary_zone": attrs.get("CURRTEMP"),
             }
 
+    if any_call_failed:
+        return {"lookup_failed": True}
     return {}
 
 
@@ -2303,10 +2456,18 @@ def check_contamination_sites(lat: float, lon: float, radius_km: float = 2.0) ->
     assessed sites) databases for anything within radius_km of
     (lat, lon). Both free, official EPA data, no key needed.
 
+    The two sources are queried and error-handled INDEPENDENTLY —
+    Superfund and Brownfields are two unrelated EPA services, and if one
+    of them is briefly down there is no reason to also discard the
+    other's already-successfully-fetched, real answer. Each list below
+    is `None` (source unavailable, unknown) if THAT source's query
+    failed, or a real list (possibly empty, meaning confirmed none
+    found) if it succeeded — never conflate the two.
+
     Returns:
         {
-            "superfund_sites_nearby": ["LOVE CANAL", ...],
-            "brownfield_sites_nearby": [...],
+            "superfund_sites_nearby": ["LOVE CANAL", ...] or None,
+            "brownfield_sites_nearby": [...] or None,
         }
     """
     def _query(url):
@@ -2324,12 +2485,21 @@ def check_contamination_sites(lat: float, lon: float, radius_km: float = 2.0) ->
         resp.raise_for_status()
         return resp.json().get("features", [])
 
-    superfund = _query(EPA_SUPERFUND_URL)
-    brownfields = _query(EPA_BROWNFIELDS_URL)
+    try:
+        superfund_sites = [_extract_site_name(f.get("attributes", {})) for f in _query(EPA_SUPERFUND_URL)]
+    except Exception:
+        log.warning("EPA Superfund lookup failed for (%s, %s)", lat, lon)
+        superfund_sites = None
+
+    try:
+        brownfield_sites = [_extract_site_name(f.get("attributes", {})) for f in _query(EPA_BROWNFIELDS_URL)]
+    except Exception:
+        log.warning("EPA Brownfields lookup failed for (%s, %s)", lat, lon)
+        brownfield_sites = None
 
     return {
-        "superfund_sites_nearby": [_extract_site_name(f.get("attributes", {})) for f in superfund],
-        "brownfield_sites_nearby": [_extract_site_name(f.get("attributes", {})) for f in brownfields],
+        "superfund_sites_nearby": superfund_sites,
+        "brownfield_sites_nearby": brownfield_sites,
     }
 
 
@@ -2543,12 +2713,16 @@ def get_comprehensive_buildability_report(polygon_coords: list[tuple[float, floa
         for key, future in futures.items():
             if future in not_done:
                 log.warning("%s check did not finish within %ss", key, _TOTAL_DEADLINE_S)
+                log_source_event(key, "source_unavailable", detail=f"timeout>{_TOTAL_DEADLINE_S}s")
                 report[key] = None
                 continue
             try:
                 report[key] = future.result()
-            except Exception:
+                result_status = "ok" if report[key] else "no_coverage"
+                log_source_event(key, result_status)
+            except Exception as e:
                 log.exception("%s check failed", key)
+                log_source_event(key, "error", detail=type(e).__name__)
                 report[key] = None
     finally:
         pool.shutdown(wait=False)
@@ -2895,6 +3069,18 @@ def skip_trace_owner(
     resp.raise_for_status()
     payload = resp.json()
 
+    # A 200 response with no "hit" key at all is not the documented
+    # shape -- e.g. a degraded/partial Tracerfy response with an
+    # {"error": ...} body instead. Silently reading that as "hit": None
+    # -> falsy -> "no match found" would tell a customer an owner is
+    # unreachable AFTER real money was billed for a lookup that never
+    # actually completed. Raise instead so this surfaces as an error,
+    # not a confident negative (see skip_trace_owners_bulk, which
+    # already catches and reports exceptions per-lookup without
+    # aborting the rest of a bulk run).
+    if "hit" not in payload:
+        raise RuntimeError(f"Unexpected Tracerfy response shape (no 'hit' field): {payload!r}"[:500])
+
     if not payload.get("hit"):
         return {"hit": False, "owner_name": None, "phones": [], "emails": [], "credits_deducted": payload.get("credits_deducted")}
 
@@ -3067,6 +3253,7 @@ _HARD_STOP_CATEGORIES = {
     "Physical road access",
     "Environmental restrictions / protected areas",
     "Physical usable area (screening only)",
+    "Environmental contamination (Superfund/Brownfields)",
 }
 
 
@@ -3083,6 +3270,33 @@ def _screenable_findings(findings: list[dict]) -> list[dict]:
     ]
 
 
+# Plain-English "quick labels" shown alongside every finding, on top of
+# the more technical STATUS/EVIDENCE_LEVEL badges. These are the exact
+# four terms explicitly asked for during the external-data-source audit
+# (2026-09-14): a failed API call must never silently read as "no," and
+# a customer should be able to tell at a glance WHY a category has no
+# real answer, not just that it doesn't:
+#   SOURCE UNAVAILABLE -- the data source did not respond at all (a
+#                          network error, a timeout, an HTTP failure).
+#                          Retrying later may get a real answer.
+#   DATA UNAVAILABLE   -- the source DID respond, but had nothing usable
+#                          for this exact location (a genuine coverage
+#                          gap, not a technical failure). Retrying won't
+#                          help; a different source might.
+#   VERIFY MANUALLY    -- this category is structurally unanswerable by
+#                          any data source this toolkit uses, for any
+#                          parcel, ever (recorded easements, setbacks,
+#                          etc.) -- always requires a human/professional
+#                          step, not a retry.
+# A finding with real, usable data gets no quick_label at all -- the
+# STATUS badge (CLEAR/CAUTION/CONCERN) already says enough, and stamping
+# a label on every single finding would bury the ones that actually need
+# a customer's attention.
+QUICK_LABEL_SOURCE_UNAVAILABLE = "SOURCE UNAVAILABLE"
+QUICK_LABEL_DATA_UNAVAILABLE = "DATA UNAVAILABLE"
+QUICK_LABEL_VERIFY_MANUALLY = "VERIFY MANUALLY"
+
+
 def make_finding(
     category: str,
     status: str,
@@ -3094,6 +3308,7 @@ def make_finding(
     limitation: str,
     next_step: str,
     source_date: str | None = None,
+    quick_label: str | None = None,
 ) -> dict:
     """
     The one standardized shape every finding in this framework is built
@@ -3103,7 +3318,15 @@ def make_finding(
     underlying DATA's own vintage where one exists (a tax year, an
     assessment date) -- NOT "when this API was called," which is always
     "just now" and tells a customer nothing useful about data freshness.
+
+    `quick_label` defaults to VERIFY MANUALLY for structurally-
+    unanswerable categories -- callers reporting a real API/coverage gap
+    should go through `_no_data_finding` instead, which sets the correct
+    SOURCE UNAVAILABLE vs. DATA UNAVAILABLE label explicitly rather than
+    guessing from evidence_level alone.
     """
+    if quick_label is None and evidence_level == EVIDENCE_REQUIRES_VERIFICATION:
+        quick_label = QUICK_LABEL_VERIFY_MANUALLY
     return {
         "category": category,
         "status": status,
@@ -3115,16 +3338,34 @@ def make_finding(
         "explanation": explanation,
         "limitation": limitation,
         "next_step": next_step,
+        "quick_label": quick_label,
     }
 
 
-def _no_data_finding(category: str, source_attempted: str, next_step: str) -> dict:
+def _no_data_finding(category: str, source_attempted: str, next_step: str, reason: str = "source_unavailable") -> dict:
     """
     The mandatory shape for "we have nothing." Fixes the exact failure
     mode named explicitly: "no data found" must never read as "doesn't
     exist." Every no-data finding says, in the same words, that absence of
     data is not absence of the underlying fact.
+
+    `reason` distinguishes the two genuinely different ways a category
+    ends up with nothing, since they call for different next steps:
+      "source_unavailable" (default) -- the API call itself failed
+        (network error, timeout, HTTP error). Worth retrying.
+      "no_coverage" -- the source responded successfully but had no
+        usable data for this exact point (e.g. USDA's soil survey
+        simply doesn't rate this location). Retrying won't help; this
+        location is just outside that source's coverage.
     """
+    if reason == "no_coverage":
+        quick_label = QUICK_LABEL_DATA_UNAVAILABLE
+        explanation = f"{source_attempted} responded but had no usable data for this exact location."
+        limitation = "A genuine coverage gap in this data source for this location, not a failed request."
+    else:
+        quick_label = QUICK_LABEL_SOURCE_UNAVAILABLE
+        explanation = f"{source_attempted} did not respond, or the request failed, for this location."
+        limitation = "No response from the data source attempted for this category -- worth retrying."
     return make_finding(
         category=category,
         status=STATUS_UNKNOWN,
@@ -3135,9 +3376,10 @@ def _no_data_finding(category: str, source_attempted: str, next_step: str) -> di
             "This does NOT mean the condition is absent. Absence of data is "
             "not evidence of absence of the underlying fact."
         ),
-        explanation=f"{source_attempted} did not return usable data for this location.",
-        limitation="No usable result from the data source attempted for this category.",
+        explanation=explanation,
+        limitation=limitation,
         next_step=next_step,
+        quick_label=quick_label,
     )
 
 
@@ -3158,6 +3400,7 @@ def _never_available_finding(category: str, why: str, next_step: str) -> dict:
         explanation=why,
         limitation="This category cannot currently be answered by any free or paid source this toolkit uses.",
         next_step=next_step,
+        quick_label=QUICK_LABEL_VERIFY_MANUALLY,
     )
 
 
@@ -3281,11 +3524,27 @@ def build_evidence_report(buildability: dict, zoning: dict, tax_flags: dict, own
 
     # --- Septic suitability -------------------------------------------------
     septic = buildability.get("septic_suitability")
-    if not septic:
+    if septic is None:
+        # get_septic_suitability() itself either raised, or the request
+        # timed out at the top-level dispatcher -- the API/request
+        # itself failed. Worth retrying.
         findings.append(_no_data_finding(
             "Septic / sanitation",
             "USDA Soil Data Access",
             "Commission a percolation test.",
+            reason="source_unavailable",
+        ))
+    elif not septic:
+        # get_septic_suitability() returned {} -- it ran successfully
+        # but genuinely has no soil-survey coverage for this exact
+        # point (or an unparseable response it couldn't recover from).
+        # Retrying the same request won't help; this is a real
+        # coverage gap in the source itself, not a failed call.
+        findings.append(_no_data_finding(
+            "Septic / sanitation",
+            "USDA Soil Data Access",
+            "Commission a percolation test.",
+            reason="no_coverage",
         ))
     else:
         rating = septic.get("rating")
@@ -3293,14 +3552,21 @@ def build_evidence_report(buildability: dict, zoning: dict, tax_flags: dict, own
             "Not limited": STATUS_CLEAR, "Somewhat limited": STATUS_CAUTION,
             "Very limited": STATUS_CONCERN, "Not rated": STATUS_UNKNOWN,
         }
+        # A rating that's missing/unrecognized (None, or anything other
+        # than the 4 known SSURGO values -- an unexpected schema change,
+        # for instance) must be treated exactly like "Not rated": real
+        # bug found during the 2026-09-14 audit where a None rating
+        # fell through to EVIDENCE_LIKELY and displayed "rated 'None'"
+        # -- confidently uncertain, when it should have been UNKNOWN.
         status = status_map.get(rating, STATUS_UNKNOWN)
-        evidence = EVIDENCE_UNKNOWN if rating == "Not rated" else EVIDENCE_LIKELY
+        evidence = EVIDENCE_LIKELY if rating in status_map and rating != "Not rated" else EVIDENCE_UNKNOWN
+        rating_text = rating if rating in status_map else "unrecognized/missing"
         findings.append(make_finding(
             category="Septic / sanitation",
             status=status,
             evidence_level=evidence,
             source="USDA Soil Data Access (SSURGO soil survey)",
-            establishes=f"The dominant soil type at this point is rated '{rating}' for septic absorption fields.",
+            establishes=f"The dominant soil type at this point is rated '{rating_text}' for septic absorption fields.",
             does_not_establish=(
                 "Whether a septic permit would actually be approved. This is a soil-type "
                 "screening rating, not a real percolation test, and does not account for lot "
@@ -3397,7 +3663,20 @@ def build_evidence_report(buildability: dict, zoning: dict, tax_flags: dict, own
         ))
 
     # --- Zoning -----------------------------------------------------------
-    if not zoning:
+    if zoning and zoning.get("lookup_failed"):
+        # A real bug found during the 2026-09-14 audit: this used to be
+        # indistinguishable from "confirmed outside our 2-county
+        # coverage" below, so a government server hiccup for a parcel
+        # that genuinely IS in Miami-Dade or King County would tell the
+        # customer they were outside coverage entirely -- wrong
+        # explanation, wrong next step (retry vs. "not covered").
+        findings.append(_no_data_finding(
+            "Zoning",
+            "County zoning GIS (Miami-Dade County, FL / King County, WA)",
+            "Try again in a moment, or contact the county planning/zoning department directly.",
+            reason="source_unavailable",
+        ))
+    elif not zoning:
         findings.append(make_finding(
             category="Zoning",
             status=STATUS_UNKNOWN,
@@ -3412,6 +3691,7 @@ def build_evidence_report(buildability: dict, zoning: dict, tax_flags: dict, own
             explanation="Free, structured, nationwide zoning data does not exist; only 2 counties are covered today.",
             limitation="No zoning information is available for the vast majority of U.S. parcels in this toolkit today.",
             next_step="Contact the county planning/zoning department directly to confirm the zoning district and permitted uses.",
+            quick_label=QUICK_LABEL_DATA_UNAVAILABLE,
         ))
     else:
         findings.append(make_finding(
@@ -3490,6 +3770,111 @@ def build_evidence_report(buildability: dict, zoning: dict, tax_flags: dict, own
                 limitation="State and local environmental designations are not checked by this toolkit.",
                 next_step="Check with the state environmental agency for any state-level protected-area designations.",
             ))
+
+    # --- Environmental contamination (EPA Superfund + Brownfields) ---------
+    # Computed by get_comprehensive_buildability_report all along, but
+    # was NEVER read here before this fix -- a real Superfund site next
+    # door had zero effect on the evidence report or the deal-potential
+    # tier, only visible via the raw-JSON toggle. Superfund/Brownfields
+    # proximity is a serious, decision-relevant environmental liability
+    # for a land investor, not a footnote.
+    contamination = buildability.get("contamination")
+    if contamination is None:
+        findings.append(_no_data_finding(
+            "Environmental contamination (Superfund/Brownfields)",
+            "EPA Superfund (NPL) + Brownfields/ACRES",
+            "Check the EPA's public Superfund/Brownfields site locators directly before relying on this being clear.",
+        ))
+    else:
+        superfund_sites = contamination.get("superfund_sites_nearby")
+        brownfield_sites = contamination.get("brownfield_sites_nearby")
+        # The two EPA sources are independently fault-tolerant (see
+        # check_contamination_sites) -- a source that failed reports
+        # None here (unknown), never confused with a source that
+        # succeeded and confirmed zero sites nearby ([]).
+        if superfund_sites is None and brownfield_sites is None:
+            findings.append(_no_data_finding(
+                "Environmental contamination (Superfund/Brownfields)",
+                "EPA Superfund (NPL) + Brownfields/ACRES (both sources did not respond)",
+                "Check the EPA's public Superfund/Brownfields site locators directly before relying on this being clear.",
+            ))
+        elif superfund_sites or brownfield_sites:
+            parts = []
+            if superfund_sites:
+                parts.append(f"Superfund (NPL) site(s) within 2km: {', '.join(superfund_sites)}")
+            if brownfield_sites:
+                parts.append(f"Brownfield/ACRES site(s) within 2km: {', '.join(brownfield_sites)}")
+            unknown_note = ""
+            if superfund_sites is None:
+                unknown_note = " (Superfund could not be checked this time -- treat as unknown, not clear.)"
+            elif brownfield_sites is None:
+                unknown_note = " (Brownfields could not be checked this time -- treat as unknown, not clear.)"
+            findings.append(make_finding(
+                category="Environmental contamination (Superfund/Brownfields)",
+                status=STATUS_CONCERN,
+                evidence_level=EVIDENCE_LIKELY,
+                source="EPA Superfund (NPL) + Brownfields/ACRES",
+                establishes="; ".join(parts) + "." + unknown_note,
+                does_not_establish="The exact distance, contamination type, cleanup status, or whether this parcel itself (vs. a nearby one) is affected -- proximity only.",
+                explanation="A federal contaminated/assessed site within 2km can mean real remediation liability, financing difficulty, or marketability problems, even if this specific parcel was never itself listed.",
+                limitation="Checked at a 2km radius from the parcel's center point, federal databases only -- state contamination registries are not checked.",
+                next_step="Look up the specific site(s) on EPA's Superfund/Brownfields site pages and consult an environmental attorney before proceeding.",
+            ))
+        else:
+            note = ""
+            if superfund_sites is None or brownfield_sites is None:
+                missing = "Superfund" if superfund_sites is None else "Brownfields"
+                note = f" ({missing} could not be checked this time -- that half is unknown, not confirmed clear.)"
+            findings.append(make_finding(
+                category="Environmental contamination (Superfund/Brownfields)",
+                status=STATUS_CLEAR if not note else STATUS_CAUTION,
+                evidence_level=EVIDENCE_LIKELY,
+                source="EPA Superfund (NPL) + Brownfields/ACRES",
+                establishes="No EPA Superfund or Brownfields/ACRES site was found within 2km of this parcel." + note,
+                does_not_establish="That the parcel is free of all contamination -- only 2 specific federal databases, at a 2km radius, were checked.",
+                explanation="A clean result on 2 specific federal datasets, not a full environmental site assessment.",
+                limitation="State contamination registries and any assessment closer than the parcel's own site are not checked.",
+                next_step="A Phase I Environmental Site Assessment is the standard way to be certain before a commercial-scale purchase.",
+            ))
+
+    # --- Wildfire risk (fine-grained, USFS) ---------------------------------
+    # Also computed all along and never surfaced here before this fix.
+    # Kept at INDICATED, never LIKELY/VERIFIED -- the "tier" cutoffs are
+    # this toolkit's own rough approximation, not an official USFS
+    # classification (see check_fine_grained_wildfire_risk's docstring).
+    wildfire = buildability.get("wildfire_fine_grained")
+    if wildfire is None:
+        findings.append(_no_data_finding(
+            "Wildfire risk (fine-grained)",
+            "US Forest Service wildfire hazard potential (30m resolution)",
+            "Check state/local wildfire hazard severity zone maps directly.",
+        ))
+    elif wildfire.get("raw_value") is None:
+        findings.append(make_finding(
+            category="Wildfire risk (fine-grained)",
+            status=STATUS_UNKNOWN,
+            evidence_level=EVIDENCE_UNKNOWN,
+            source="US Forest Service wildfire hazard potential (30m resolution)",
+            establishes="No usable value returned for this exact point (common for water, urban, or other non-burnable areas).",
+            does_not_establish="That wildfire risk is low -- this specific dataset simply has no rating here.",
+            explanation="USFS's fine-grained layer doesn't rate every point (e.g. open water, dense urban areas).",
+            limitation="A gap in this one dataset, not a confirmed absence of wildfire risk.",
+            next_step="Check state/local wildfire hazard severity zone maps directly.",
+        ))
+    else:
+        tier = wildfire.get("tier") or ""
+        status = STATUS_CONCERN if "High" in tier else (STATUS_CAUTION if "Moderate" in tier else STATUS_CLEAR)
+        findings.append(make_finding(
+            category="Wildfire risk (fine-grained)",
+            status=status,
+            evidence_level=EVIDENCE_INDICATED,
+            source="US Forest Service wildfire hazard potential (30m resolution)",
+            establishes=f"Fine-grained wildfire hazard tier: {tier} (raw index value {wildfire.get('raw_value')}).",
+            does_not_establish="An official USFS risk classification -- the tier cutoffs used here are this toolkit's own rough approximation, not an official breakpoint.",
+            explanation="30-meter-resolution federal data, much finer than the county-wide FEMA hazard rating, but the tier labels themselves are this toolkit's own estimate.",
+            limitation="Rough approximation only -- treat the raw index value as the more trustworthy relative signal.",
+            next_step="Check your state/local wildfire hazard severity zone maps and insurer requirements directly before relying on this.",
+        ))
 
     # --- Nearby development / surrounding houses (context, not risk) -------
     if nearby is not None:
@@ -3626,7 +4011,7 @@ def _build_scores(findings: list[dict]) -> dict:
         "access_score": status_of("Physical road access", "Legal road access", "Parcel frontage", "Easements"),
         "utility_score": status_of("Utilities (electric/water/sewer)"),
         "septic_sanitation_risk": status_of("Septic / sanitation"),
-        "environmental_risk": status_of("Wetlands", "Flood / floodway", "Environmental restrictions / protected areas"),
+        "environmental_risk": status_of("Wetlands", "Flood / floodway", "Environmental restrictions / protected areas", "Environmental contamination (Superfund/Brownfields)"),
         "zoning_risk": status_of("Zoning", "Minimum lot size, setbacks & frontage requirements"),
     }
 
