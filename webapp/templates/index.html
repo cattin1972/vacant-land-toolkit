@@ -740,7 +740,17 @@ const CSV_COLUMNS = [
 ];
 
 function csvEscape(value) {
-  const s = value === null || value === undefined ? '' : String(value);
+  let s = value === null || value === undefined ? '' : String(value);
+  // CSV/formula injection (fixed 2026-09-14, security audit): a field
+  // beginning with =, +, -, or @ is read as a FORMULA by Excel/Sheets
+  // when this file is opened, not as plain text -- this data comes
+  // from Realie/county records this app doesn't fully control (an
+  // owner name, an address) and could in principle start with one of
+  // these characters. Prefixing with a leading apostrophe is the
+  // standard (OWASP-recommended) neutralization: Excel/Sheets both
+  // treat it as "force this cell to text," and it's invisible in the
+  // opened spreadsheet, not an extra visible character in the field.
+  if (/^[=+\-@]/.test(s)) s = "'" + s;
   return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
 

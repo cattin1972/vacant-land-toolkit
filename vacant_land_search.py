@@ -83,6 +83,7 @@ import json
 import logging
 import math
 import os
+import re
 import sys
 import threading
 import time
@@ -1218,6 +1219,21 @@ def check_cache_county_tax_delinquency(tax_id: str) -> dict:
          "unpaid_year_count": ..., "delinquent": True/False}
     or {} if not found (not in the delinquent layer at all).
     """
+    # tax_id is interpolated directly into an ArcGIS 'where' clause
+    # below -- ArcGIS Server evaluates that as a real SQL-like
+    # expression server-side, so an unvalidated value here is a real
+    # injection point (e.g. "' OR '1'='1" would return every delinquent
+    # parcel in the county, not just the one requested). Real bug found
+    # during the 2026-09-14 security audit: every OTHER tax-ID lookup in
+    # this file either uses a safe params-dict filter (Socrata/CKAN) or
+    # validates the ID first (Philadelphia's opa_number.isdigit() check)
+    # before ever building a query string -- this one didn't. Cache
+    # County's own documented format is digits and hyphens (e.g.
+    # "02-216-0025"); reject anything else rather than guess.
+    tax_id = str(tax_id).strip()
+    if not re.fullmatch(r"[A-Za-z0-9-]+", tax_id):
+        raise ValueError(f"tax_id must be alphanumeric/hyphens only, got: {tax_id!r}")
+
     params = {
         "where": f"tax_id = '{tax_id}'",
         "outFields": "*",

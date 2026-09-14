@@ -9,8 +9,13 @@ before this goes public).
 Run: python app.py, then open http://127.0.0.1:5000 in a browser.
 """
 import concurrent.futures
+import hmac
 import os
 import sys
+import threading
+import time
+from collections import defaultdict, deque
+from functools import wraps
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import vacant_land_search as v
@@ -18,6 +23,53 @@ import vacant_land_search as v
 from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__)
+
+# --------------------------------------------------------------------------
+# Lightweight, dependency-free per-IP rate limiting (added 2026-09-14,
+# security audit). Applied only to the endpoints that require NO API key
+# at all and each trigger real outbound calls to free government
+# services (a parcel report alone fans out to ~12-14 of them) -- found
+# as a real risk two ways: an attacker hammering these could exhaust
+# this single-process server's thread pool (denial of service against
+# this app itself), or could burn through the SHARED rate-limit
+# tolerance those free government services extend to this server's own
+# IP, potentially getting it throttled or blocked entirely -- breaking
+# the feature for every legitimate customer, not just the attacker.
+#
+# In-memory, per-process -- resets on restart, and if this ever runs
+# under more than one gunicorn worker, each worker tracks its own
+# counts independently rather than sharing one global count. A real,
+# honest limitation for a single small deployment, not a substitute for
+# a real edge/WAF-level limiter if this needs to scale past one
+# process later -- documented so it isn't mistaken for more than it is.
+_rate_limit_lock = threading.Lock()
+_rate_limit_hits: dict[tuple[str, str], deque] = defaultdict(deque)
+
+
+def rate_limited(max_requests: int, window_seconds: int):
+    def decorator(fn):
+        @wraps(fn)
+        def wrapped(*args, **kwargs):
+            # X-Forwarded-For is set by Render's own proxy in front of
+            # this app; request.remote_addr alone would just be the
+            # proxy's own IP for every visitor. Take the first (client)
+            # entry, since a caller could otherwise spoof additional
+            # entries after their own real one.
+            forwarded = request.headers.get("X-Forwarded-For", "")
+            client_ip = (forwarded.split(",")[0].strip() if forwarded else None) or request.remote_addr or "unknown"
+            bucket_key = (fn.__name__, client_ip)
+            now = time.monotonic()
+            with _rate_limit_lock:
+                hits = _rate_limit_hits[bucket_key]
+                while hits and now - hits[0] > window_seconds:
+                    hits.popleft()
+                if len(hits) >= max_requests:
+                    retry_after = max(1, int(window_seconds - (now - hits[0])))
+                    return jsonify({"error": f"Too many requests -- try again in about {retry_after}s."}), 429
+                hits.append(now)
+            return fn(*args, **kwargs)
+        return wrapped
+    return decorator
 
 # NOTE: this app deliberately holds NO server-side, cross-request
 # parcel cache (fixed 2026-09-12 -- there used to be a shared
@@ -142,9 +194,22 @@ def api_health_sources():
     a bad day right now" check without needing to dig through Render's
     log viewer. Per-process, in-memory, resets on every restart/deploy
     (see log_source_event's own docstring) -- a debugging aid, not a
-    durable observability system. Contains no customer data: only
-    source names, outcome counts, and generic error types.
+    durable observability system.
+
+    SECURE BY DEFAULT (fixed 2026-09-14, security audit): this used to
+    be open to anyone who found the URL, with no secret required. Now
+    disabled entirely (a plain 404, not a 401/403 -- never confirm the
+    endpoint even exists to an unauthenticated caller) unless
+    HEALTH_CHECK_SECRET is explicitly set in the environment, and even
+    then only responds to a request carrying that exact secret. Costs
+    nothing to leave off; an operator who wants this has to opt in.
     """
+    expected_secret = os.environ.get("HEALTH_CHECK_SECRET")
+    if not expected_secret:
+        return jsonify({"error": "Not found."}), 404
+    provided = request.args.get("secret") or request.headers.get("X-Health-Secret") or ""
+    if not hmac.compare_digest(provided, expected_secret):
+        return jsonify({"error": "Not found."}), 404
     return jsonify(v.get_source_health_summary())
 
 
@@ -180,11 +245,16 @@ def api_search():
             max_acres=float(max_acres) if max_acres else None,
             api_key=api_key, max_pages=1,
         )
-        # No PII here -- state/county/city are search-area geography,
-        # not a specific parcel or person, and are the whole point of
-        # this log line (spotting "Realie has been down for Texas
-        # searches all afternoon" without needing anyone's address).
-        v.log_source_event("realie_search", "ok", detail=f"{state}/{county or '*'}/{city or '*'} -> {len(results)} results")
+        # Deliberately NOT including state/county/city here (fixed
+        # 2026-09-14, security audit): which market a customer is
+        # searching is THEIR OWN competitively sensitive business
+        # activity, not diagnostic noise -- an earlier version of this
+        # line put it in the detail field, which /api/health/sources
+        # then exposed to anyone who found that URL. A result COUNT
+        # with no geography still shows "Realie searches are failing
+        # right now" without exposing what any specific customer is
+        # doing.
+        v.log_source_event("realie_search", "ok", detail=f"{len(results)} results")
     except Exception as e:
         v.log_source_event("realie_search", "error", detail=type(e).__name__)
         return jsonify({"error": str(e)}), 502
@@ -259,6 +329,7 @@ def api_search():
 
 
 @app.route("/api/parcel/<path:apn>/report", methods=["POST"])
+@rate_limited(max_requests=30, window_seconds=60)
 def api_parcel_report(apn):
     # The browser sends back the SAME raw record it already got from
     # its own earlier /api/search call -- no server-side lookup at all,
@@ -362,6 +433,7 @@ def api_parcel_report(apn):
 
 
 @app.route("/api/parcel/score/bulk", methods=["POST"])
+@rate_limited(max_requests=6, window_seconds=300)
 def api_score_bulk():
     """
     Scores a batch of search results with JUST the deal-potential tier
@@ -446,6 +518,7 @@ def api_score_bulk():
 
 
 @app.route("/api/delinquency/<place_key>")
+@rate_limited(max_requests=30, window_seconds=60)
 def api_delinquency(place_key):
     place = DELINQUENCY_CHECKS.get(place_key)
     if not place:
@@ -562,5 +635,16 @@ if __name__ == "__main__":
     # deployment notes) -- gunicorn imports the `app` object directly
     # and never executes this block.
     port = int(os.environ.get("PORT", 5000))
-    debug = os.environ.get("FLASK_DEBUG", "true").lower() == "true"
+    # Secure by default (fixed 2026-09-14, security audit): this used to
+    # default to "true" when FLASK_DEBUG was unset. Flask's debug mode
+    # includes the interactive Werkzeug debugger, which lets anyone who
+    # can trigger a traceback run arbitrary Python code from their
+    # browser -- a severe vulnerability if this ever ran exposed to the
+    # internet with debug on. Unreachable in production today (gunicorn
+    # imports `app` directly and never executes this block at all), but
+    # a secure-by-default fallback shouldn't rely on that alone -- an
+    # insecure default is still an insecure default even when today's
+    # deployment happens not to exercise it. Explicitly opt IN with
+    # FLASK_DEBUG=true for local development instead.
+    debug = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
     app.run(host="0.0.0.0", port=port, debug=debug)

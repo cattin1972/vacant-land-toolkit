@@ -33,27 +33,41 @@
 </table>
 
 <script>
+// Built with createElement/textContent, never innerHTML string
+// interpolation -- owner_name, mail_street, and every other field here
+// comes from an external source (Realie/county records) this app
+// doesn't fully control. An innerHTML template literal used to sit
+// here; fixed 2026-09-14 (security audit) to match the same safe
+// pattern index.html's renderResults() already uses, since a hostile
+// or simply malformed owner-name-shaped string could otherwise execute
+// as script in this page.
+function cell(text) {
+  const td = document.createElement('td');
+  td.textContent = text == null ? '' : text;
+  return td;
+}
+
 const data = JSON.parse(localStorage.getItem('vacant_land_export_data') || '[]');
 document.getElementById('meta').textContent = `${data.length} parcels -- generated ${new Date().toLocaleString()}`;
 const tbody = document.getElementById('rows');
 data.forEach(r => {
   const tr = document.createElement('tr');
   const flagged = r.tax_flags && r.tax_flags.flagged;
-  tr.innerHTML = `
-    <td>${r.owner_name || ''}</td>
-    <td>${r.mail_street || ''}</td>
-    <td>${r.mail_city || ''}</td>
-    <td>${r.mail_state || ''}</td>
-    <td>${r.mail_zip || ''}</td>
-    <td>${r.owner_type || ''}</td>
-    <td>${r.owner_phone || '(not skip-traced)'}</td>
-    <td>${r.owner_email || '(not skip-traced)'}</td>
-    <td>${r.apn || ''}</td>
-    <td>${r.address || ''}</td>
-    <td>${r.acres != null ? r.acres.toFixed(2) : ''}</td>
-    <td>${r.land_value != null ? '$' + r.land_value.toLocaleString() : ''}</td>
-    <td class="${flagged ? 'flagged' : ''}">${flagged ? 'YES' : ''}</td>
-  `;
+  tr.appendChild(cell(r.owner_name || ''));
+  tr.appendChild(cell(r.mail_street || ''));
+  tr.appendChild(cell(r.mail_city || ''));
+  tr.appendChild(cell(r.mail_state || ''));
+  tr.appendChild(cell(r.mail_zip || ''));
+  tr.appendChild(cell(r.owner_type || ''));
+  tr.appendChild(cell(r.owner_phone || '(not skip-traced)'));
+  tr.appendChild(cell(r.owner_email || '(not skip-traced)'));
+  tr.appendChild(cell(r.apn || ''));
+  tr.appendChild(cell(r.address || ''));
+  tr.appendChild(cell(r.acres != null ? r.acres.toFixed(2) : ''));
+  tr.appendChild(cell(r.land_value != null ? '$' + r.land_value.toLocaleString() : ''));
+  const flagCell = cell(flagged ? 'YES' : '');
+  if (flagged) flagCell.className = 'flagged';
+  tr.appendChild(flagCell);
   tbody.appendChild(tr);
 });
 </script>
